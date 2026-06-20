@@ -1,0 +1,292 @@
+{
+  "d": 0,
+  "segments": [
+    {
+      "segment": 1,
+      "obs": 120,
+      "arma_order": [
+        0,
+        0
+      ],
+      "d": 1,
+      "aic": 338.99,
+      "bic": 344.54,
+      "ljungbox_ok": true,
+      "arch_effect": false,
+      "distribution": "t",
+      "coefficients": {
+        "const": -0.0006,
+        "sigma2": 0.9774
+      }
+    },
+    {
+      "segment": 2,
+      "obs": 40,
+      "arma_order": [
+        0,
+        0
+      ],
+      "d": 1,
+      "aic": 129.88,
+      "bic": 133.21,
+      "ljungbox_ok": true,
+      "arch_effect": false,
+      "distribution": "normal",
+      "coefficients": {
+        "const": -0.087,
+        "sigma2": 1.4768
+      }
+    },
+    {
+      "segment": 3,
+      "obs": 50,
+      "arma_order": [
+        0,
+        0
+      ],
+      "d": 1,
+      "aic": 142.35,
+      "bic": 146.14,
+      "ljungbox_ok": true,
+      "arch_effect": false,
+      "distribution": "t",
+      "coefficients": {
+        "const": 0.1776,
+        "sigma2": 0.9858
+      }
+    },
+    {
+      "segment": 4,
+      "obs": 30,
+      "arma_order": [
+        0,
+        0
+      ],
+      "d": 1,
+      "aic": 78.03,
+      "bic": 80.76,
+      "ljungbox_ok": true,
+      "arch_effect": false,
+      "distribution": "normal",
+      "coefficients": {
+        "const": 0.2712,
+        "sigma2": 0.7519
+      }
+    },
+    {
+      "segment": 5,
+      "obs": 60,
+      "arma_order": [
+        0,
+        0
+      ],
+      "d": 1,
+      "aic": 184.59,
+      "bic": 188.74,
+      "ljungbox_ok": true,
+      "arch_effect": false,
+      "distribution": "normal",
+      "coefficients": {
+        "const": 0.0031,
+        "sigma2": 1.2497
+      }
+    }
+  ],
+  "breakpoints": [
+    120,
+    160,
+    210,
+    240
+  ],
+  "log": [
+    {
+      "step": "Structural breaks (PELT)",
+      "decision": "Found 4 breakpoint(s): [120, 160, 210, 240]"
+    },
+    {
+      "step": "--- Segment 1 (120 obs) ---",
+      "decision": ""
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Non-stationary",
+      "pvalue": 0.1539
+    },
+    {
+      "step": "Differencing d=1",
+      "decision": "Applied diff()"
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Stationary",
+      "pvalue": 0
+    },
+    {
+      "step": "ARMA order selection (auto_arima BIC)",
+      "decision": "ARMA(0,0)"
+    },
+    {
+      "step": "Ljung-Box (residuals)",
+      "decision": "No autocorrelation ✓",
+      "pvalue": 0.7995
+    },
+    {
+      "step": "ARCH-LM test",
+      "decision": "No ARCH effect ✓",
+      "pvalue": 0.4045
+    },
+    {
+      "step": "Jarque-Bera (distribution)",
+      "decision": "Student-t",
+      "pvalue": 0.0379
+    },
+    {
+      "step": "--- Segment 2 (40 obs) ---",
+      "decision": ""
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Non-stationary",
+      "pvalue": 0.0056
+    },
+    {
+      "step": "Differencing d=1",
+      "decision": "Applied diff()"
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Stationary",
+      "pvalue": 0.5269
+    },
+    {
+      "step": "ARMA order selection (auto_arima BIC)",
+      "decision": "ARMA(0,0)"
+    },
+    {
+      "step": "Ljung-Box (residuals)",
+      "decision": "No autocorrelation ✓",
+      "pvalue": 0.5136
+    },
+    {
+      "step": "ARCH-LM test",
+      "decision": "No ARCH effect ✓",
+      "pvalue": 0.6174
+    },
+    {
+      "step": "Jarque-Bera (distribution)",
+      "decision": "Normal",
+      "pvalue": 0.6356
+    },
+    {
+      "step": "--- Segment 3 (50 obs) ---",
+      "decision": ""
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Non-stationary",
+      "pvalue": 0.9512
+    },
+    {
+      "step": "Differencing d=1",
+      "decision": "Applied diff()"
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Stationary",
+      "pvalue": 0
+    },
+    {
+      "step": "ARMA order selection (auto_arima BIC)",
+      "decision": "ARMA(0,0)"
+    },
+    {
+      "step": "Ljung-Box (residuals)",
+      "decision": "No autocorrelation ✓",
+      "pvalue": 0.7132
+    },
+    {
+      "step": "ARCH-LM test",
+      "decision": "No ARCH effect ✓",
+      "pvalue": 0.9306
+    },
+    {
+      "step": "Jarque-Bera (distribution)",
+      "decision": "Student-t",
+      "pvalue": 0.0393
+    },
+    {
+      "step": "--- Segment 4 (30 obs) ---",
+      "decision": ""
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Non-stationary",
+      "pvalue": 0.54
+    },
+    {
+      "step": "Differencing d=1",
+      "decision": "Applied diff()"
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Stationary",
+      "pvalue": 0.0048
+    },
+    {
+      "step": "ARMA order selection (auto_arima BIC)",
+      "decision": "ARMA(0,0)"
+    },
+    {
+      "step": "Ljung-Box (residuals)",
+      "decision": "No autocorrelation ✓",
+      "pvalue": 0.0987
+    },
+    {
+      "step": "ARCH-LM test",
+      "decision": "No ARCH effect ✓",
+      "pvalue": 0.9146
+    },
+    {
+      "step": "Jarque-Bera (distribution)",
+      "decision": "Normal",
+      "pvalue": 0.4187
+    },
+    {
+      "step": "--- Segment 5 (60 obs) ---",
+      "decision": ""
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Non-stationary",
+      "pvalue": 0.0887
+    },
+    {
+      "step": "Differencing d=1",
+      "decision": "Applied diff()"
+    },
+    {
+      "step": "Stationarity (ADF/PP/KPSS)",
+      "decision": "Stationary",
+      "pvalue": 0
+    },
+    {
+      "step": "ARMA order selection (auto_arima BIC)",
+      "decision": "ARMA(0,0)"
+    },
+    {
+      "step": "Ljung-Box (residuals)",
+      "decision": "No autocorrelation ✓",
+      "pvalue": 0.2426
+    },
+    {
+      "step": "ARCH-LM test",
+      "decision": "No ARCH effect ✓",
+      "pvalue": 0.9282
+    },
+    {
+      "step": "Jarque-Bera (distribution)",
+      "decision": "Normal",
+      "pvalue": 0.545
+    }
+  ]
+}
