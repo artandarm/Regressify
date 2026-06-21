@@ -26,8 +26,14 @@ class BasePipeline:
     def run(self) -> dict:
         raise NotImplementedError
 
-    def _log(self, step: str, decision: str, pvalue=None):
-        entry = {"step": step, "decision": decision}
+    def _log(self, step: str, decision: str, pvalue=None,
+             verdict: str = "info"):
+        entry = {
+            "step": step,
+            "decision": decision,
+            "verdict": verdict,
+            "phase": getattr(self, "_current_phase", "pre_analysis"),
+        }
         if pvalue is not None:
             entry["pvalue"] = round(float(pvalue), 4)
         self.log.append(entry)
@@ -77,12 +83,22 @@ class TSAnalysisPipeline(BasePipeline):
         cleaned[outlier_mask] = np.nan
         cleaned = cleaned.interpolate(method="linear").dropna()
 
+        self._outlier_info = [
+            {
+                "index": int(idx),
+                "original_value": round(float(series.iloc[idx]), 6),
+                "cleaned_value": round(float(cleaned.loc[idx]), 6),
+            }
+            for idx in outlier_idx
+        ]
+
         self._log(
             step="Outlier detection (AO test on diffs, Z>3.5)",
             decision=(
                 f"Removed {n_out} additive outlier(s) at t={outlier_idx}, interpolated"
                 if n_out else "No outliers detected"
-            )
+            ),
+            verdict="warn" if n_out else "ok",
         )
         return cleaned
 
@@ -100,7 +116,8 @@ class TSAnalysisPipeline(BasePipeline):
                 break
         self._log(
             step="Seasonality detection (ACF)",
-            decision=f"Seasonal period m={best_m}" if best_m else "No seasonality detected"
+            decision=f"Seasonal period m={best_m}" if best_m else "No seasonality detected",
+            verdict="info",
         )
         return best_m
 
@@ -115,7 +132,8 @@ class TSAnalysisPipeline(BasePipeline):
         self._log(
             step="Stationarity (ADF/PP/KPSS)",
             decision="Stationary" if is_stationary else "Non-stationary",
-            pvalue=adf_p
+            pvalue=adf_p,
+            verdict="ok" if is_stationary else "warn",
         )
         return is_stationary
 
@@ -124,7 +142,7 @@ class TSAnalysisPipeline(BasePipeline):
         while not self.test_stationarity(series) and d < 2:
             series = series.diff().dropna()
             d += 1
-            self._log(step=f"Differencing d={d}", decision="Applied diff()")
+            self._log(step=f"Differencing d={d}", decision="Applied diff()", verdict="info")
         return series, d
 
     # ── 4. Structural breaks ──────────────────
@@ -143,7 +161,8 @@ class TSAnalysisPipeline(BasePipeline):
             pen += 10
         self._log(
             step="PELT penalty calibration (sanity-check RW)",
-            decision=f"Calibrated pen={pen} (RW false positives suppressed)"
+            decision=f"Calibrated pen={pen} (RW false positives suppressed)",
+            verdict="info",
         )
 
         # ── Детектор 1: PELT (rbf) ──
@@ -156,7 +175,8 @@ class TSAnalysisPipeline(BasePipeline):
             decision=(
                 f"Found {len(pelt_bkps)} break(s) at {pelt_bkps}"
                 if pelt_vote else "No breaks detected"
-            )
+            ),
+            verdict="warn" if pelt_vote else "ok",
         )
 
         # ── Детектор 2: CUSUM (OLS residuals) ──
@@ -168,11 +188,13 @@ class TSAnalysisPipeline(BasePipeline):
             cusum_vote = cusum_pvalue < 0.05
             self._log(
                 step="Break detection #2: CUSUM (OLS residuals)",
-                decision="Breaks detected ✓" if cusum_vote else "No breaks",
-                pvalue=cusum_pvalue
+                decision="Breaks detected" if cusum_vote else "No breaks",
+                pvalue=cusum_pvalue,
+                verdict="warn" if cusum_vote else "ok",
             )
         except Exception as e:
-            self._log(step="Break detection #2: CUSUM", decision=f"Skipped: {str(e)}")
+            self._log(step="Break detection #2: CUSUM", decision=f"Skipped: {str(e)}",
+                      verdict="info")
 
         # ── Детектор 3: Binseg (l2, BIC-optimal k) ──
         binseg_vote = False
@@ -194,12 +216,14 @@ class TSAnalysisPipeline(BasePipeline):
             self._log(
                 step="Break detection #3: Binseg (l2, BIC)",
                 decision=(
-                    f"BIC-optimal k={best_k} break(s) ✓"
+                    f"BIC-optimal k={best_k} break(s)"
                     if binseg_vote else "BIC-optimal k=0 — no breaks"
-                )
+                ),
+                verdict="warn" if binseg_vote else "ok",
             )
         except Exception as e:
-            self._log(step="Break detection #3: Binseg (BIC)", decision=f"Skipped: {str(e)}")
+            self._log(step="Break detection #3: Binseg (BIC)", decision=f"Skipped: {str(e)}",
+                      verdict="info")
 
         self._pelt_candidates = pelt_bkps
 
@@ -209,13 +233,15 @@ class TSAnalysisPipeline(BasePipeline):
         if votes >= 2 and pelt_bkps:
             self._log(
                 step="Break detection vote (2/3)",
-                decision=f"✓ {votes}/3 — segmenting at {pelt_bkps}"
+                decision=f"{votes}/3 — segmenting at {pelt_bkps}",
+                verdict="ok",
             )
             return pelt_bkps
         else:
             self._log(
                 step="Break detection vote (2/3)",
-                decision=f"⚠️ {votes}/3 — treating as no structural breaks"
+                decision=f"{votes}/3 — treating as no structural breaks",
+                verdict="info",
             )
             return []
 
@@ -232,16 +258,19 @@ class TSAnalysisPipeline(BasePipeline):
             if var_bkps:
                 self._log(
                     step="Variance break detection (squared residuals)",
-                    decision=f"⚠️ {len(var_bkps)} variance break(s) at {var_bkps} — possible volatility regime shift"
+                    decision=f"{len(var_bkps)} variance break(s) at {var_bkps} — possible volatility regime shift",
+                    verdict="warn",
                 )
             else:
                 self._log(
                     step="Variance break detection (squared residuals)",
-                    decision="No variance breaks detected ✓"
+                    decision="No variance breaks detected",
+                    verdict="ok",
                 )
             return var_bkps
         except Exception as e:
-            self._log(step="Variance break detection", decision=f"Skipped: {str(e)}")
+            self._log(step="Variance break detection", decision=f"Skipped: {str(e)}",
+                      verdict="info")
             return []
 
     # ── 4в. Co-location check ─────────────────
@@ -265,13 +294,15 @@ class TSAnalysisPipeline(BasePipeline):
         split = int(n * 0.8)
 
         if split < 20:
-            self._log(step="OOS: segmented vs unified", decision="Skipped — series too short")
+            self._log(step="OOS: segmented vs unified", decision="Skipped — series too short",
+                      verdict="info")
             return {}
 
         valid_bps = [bp for bp in candidates if 10 <= bp <= split - 10]
         if not valid_bps:
             self._log(step="OOS: segmented vs unified",
-                      decision="Skipped — no candidate breakpoint inside training window")
+                      decision="Skipped — no candidate breakpoint inside training window",
+                      verdict="info")
             return {}
 
         last_bp = valid_bps[-1]
@@ -293,7 +324,8 @@ class TSAnalysisPipeline(BasePipeline):
 
         if len(errors_u) < 5 or len(errors_s) < 5:
             self._log(step="OOS: segmented vs unified",
-                      decision="Skipped — insufficient test observations")
+                      decision="Skipped — insufficient test observations",
+                      verdict="info")
             return {}
 
         rmse_u = round(float(np.sqrt(np.mean(errors_u))), 6)
@@ -301,15 +333,19 @@ class TSAnalysisPipeline(BasePipeline):
 
         if rmse_s < rmse_u * 0.98:
             winner = "segmented"
-            decision = f"✓ Segmented wins: RMSE={rmse_s} vs unified RMSE={rmse_u}"
+            decision = f"Segmented wins: RMSE={rmse_s} vs unified RMSE={rmse_u}"
+            oos_verdict = "ok"
         elif rmse_u < rmse_s * 0.98:
             winner = "unified"
-            decision = f"⚠️ Unified wins: RMSE={rmse_u} vs segmented RMSE={rmse_s}"
+            decision = f"Unified wins: RMSE={rmse_u} vs segmented RMSE={rmse_s}"
+            oos_verdict = "warn"
         else:
             winner = "tie"
-            decision = f"~Tie: unified RMSE={rmse_u}, segmented RMSE={rmse_s} — deferring to break-test votes"
+            decision = f"Tie: unified RMSE={rmse_u}, segmented RMSE={rmse_s} — deferring to break-test votes"
+            oos_verdict = "info"
 
-        self._log(step="OOS: segmented vs unified (RMSE)", decision=decision)
+        self._log(step="OOS: segmented vs unified (RMSE)", decision=decision,
+                  verdict=oos_verdict)
         return {"winner": winner, "rmse_unified": rmse_u, "rmse_segmented": rmse_s}
 
     # ── 5. Model selection ────────────────────
@@ -335,17 +371,20 @@ class TSAnalysisPipeline(BasePipeline):
             if P == 0 and Q == 0:
                 self._log(
                     step="Seasonality check",
-                    decision="Seasonal orders P=Q=0 → treated as non-seasonal"
+                    decision="Seasonal orders P=Q=0 — treated as non-seasonal",
+                    verdict="info",
                 )
                 self._log(
                     step="Model order selection (auto_arima AIC)",
-                    decision=f"ARMA({p},{q})"
+                    decision=f"ARMA({p},{q})",
+                    verdict="ok",
                 )
                 return p, q, 0, 0, None
 
             self._log(
                 step="Model order selection (auto_arima AIC)",
-                decision=f"SARIMA({p},0,{q})({P},0,{Q})[{seasonal_m}]"
+                decision=f"SARIMA({p},0,{q})({P},0,{Q})[{seasonal_m}]",
+                verdict="ok",
             )
             return p, q, P, Q, seasonal_m
 
@@ -364,7 +403,8 @@ class TSAnalysisPipeline(BasePipeline):
             p, q = model.order[0], model.order[2]
             self._log(
                 step="Model order selection (auto_arima AIC)",
-                decision=f"ARMA({p},{q})"
+                decision=f"ARMA({p},{q})",
+                verdict="ok",
             )
             return p, q, 0, 0, None
 
@@ -390,12 +430,14 @@ class TSAnalysisPipeline(BasePipeline):
         if insignificant:
             self._log(
                 step="Coefficient significance (t-test)",
-                decision=f"⚠️ Insignificant: {insignificant} — consider simpler model"
+                decision=f"Insignificant: {insignificant} — consider simpler model",
+                verdict="warn",
             )
         else:
             self._log(
                 step="Coefficient significance (t-test)",
-                decision="All coefficients significant ✓"
+                decision="All coefficients significant",
+                verdict="ok",
             )
 
         return coef_report, insignificant
@@ -479,9 +521,10 @@ class TSAnalysisPipeline(BasePipeline):
                 self._log(
                     step="AIC/BIC conflict check",
                     decision=(
-                        f"⚠️ AIC→ARIMA({p},{d},{q}) vs BIC→ARIMA({p_bic},{d},{q_bic}) "
-                        f"| ΔAIC={delta} — check coefficient significance"
-                    )
+                        f"AIC→ARIMA({p},{d},{q}) vs BIC→ARIMA({p_bic},{d},{q_bic}) "
+                        f"| delta_aic={delta} — check coefficient significance"
+                    ),
+                    verdict="warn",
                 )
                 return {
                     "conflict": True,
@@ -492,12 +535,14 @@ class TSAnalysisPipeline(BasePipeline):
             else:
                 self._log(
                     step="AIC/BIC conflict check",
-                    decision=f"AIC and BIC agree → ARIMA({p},{d},{q}) ✓"
+                    decision=f"AIC and BIC agree — ARIMA({p},{d},{q})",
+                    verdict="ok",
                 )
                 return {"conflict": False}
 
         except Exception as e:
-            self._log(step="AIC/BIC conflict check", decision=f"Skipped: {str(e)}")
+            self._log(step="AIC/BIC conflict check", decision=f"Skipped: {str(e)}",
+                      verdict="info")
             return {"conflict": False}
 
     # ── 9. Walk-forward validation ────────────
@@ -508,7 +553,8 @@ class TSAnalysisPipeline(BasePipeline):
         split = int(n * (1 - test_size))
 
         if split < 20:
-            self._log(step="Walk-forward validation", decision="Skipped — series too short")
+            self._log(step="Walk-forward validation", decision="Skipped — series too short",
+                      verdict="info")
             return {}
 
         label1 = f"ARIMA({p},{d},{q})"
@@ -536,11 +582,13 @@ class TSAnalysisPipeline(BasePipeline):
             loser = max(rmse, key=rmse.get)
             self._log(
                 step="Walk-forward validation (RMSE)",
-                decision=f"✓ {winner} RMSE={rmse[winner]} beats {loser} RMSE={rmse[loser]}"
+                decision=f"{winner} RMSE={rmse[winner]} beats {loser} RMSE={rmse[loser]}",
+                verdict="ok",
             )
         else:
             winner = label1
-            self._log(step="Walk-forward validation (RMSE)", decision="Only one model evaluated")
+            self._log(step="Walk-forward validation (RMSE)", decision="Only one model evaluated",
+                      verdict="info")
 
         return {"rmse": rmse, "winner": winner}
 
@@ -594,7 +642,8 @@ class TSAnalysisPipeline(BasePipeline):
             )
             self._log(
                 step="Model averaging (Akaike weights)",
-                decision=f"⚠️ Top weight={best_weight:.2f} (<0.70) — evidence spread: {summary}"
+                decision=f"Top weight={best_weight:.2f} (<0.70) — evidence spread: {summary}",
+                verdict="warn",
             )
             # Walk-forward RMSE for each candidate when ambiguous
             n = len(series)
@@ -615,7 +664,8 @@ class TSAnalysisPipeline(BasePipeline):
         else:
             self._log(
                 step="Model averaging (Akaike weights)",
-                decision=f"✓ {top[0]['label']} dominates: weight={best_weight:.2f} (>=0.70)"
+                decision=f"{top[0]['label']} dominates: weight={best_weight:.2f} (>=0.70)",
+                verdict="ok",
             )
 
         return {"ambiguous": ambiguous, "top_weight": best_weight, "candidates": top}
@@ -628,8 +678,9 @@ class TSAnalysisPipeline(BasePipeline):
         ok = pvalue >= 0.05
         self._log(
             step="Ljung-Box (residuals)",
-            decision="No autocorrelation ✓" if ok else "Autocorrelation detected ✗",
-            pvalue=pvalue
+            decision="No autocorrelation" if ok else "Autocorrelation detected",
+            pvalue=pvalue,
+            verdict="ok" if ok else "error",
         )
         return ok
 
@@ -638,8 +689,9 @@ class TSAnalysisPipeline(BasePipeline):
         has_arch = pvalue < 0.05
         self._log(
             step="ARCH-LM test",
-            decision="ARCH effect detected → fit GARCH" if has_arch else "No ARCH effect ✓",
-            pvalue=pvalue
+            decision="ARCH effect detected — fitting GARCH" if has_arch else "No ARCH effect",
+            pvalue=pvalue,
+            verdict="warn" if has_arch else "ok",
         )
         return has_arch
 
@@ -650,7 +702,8 @@ class TSAnalysisPipeline(BasePipeline):
             params = {k: round(float(v), 6) for k, v in res.params.items()}
             self._log(
                 step="GARCH(1,1) estimation",
-                decision=f"omega={params.get('omega','?')}, alpha={params.get('alpha[1]','?')}, beta={params.get('beta[1]','?')}"
+                decision=f"omega={params.get('omega','?')}, alpha={params.get('alpha[1]','?')}, beta={params.get('beta[1]','?')}",
+                verdict="ok",
             )
             return {
                 "fitted": True,
@@ -659,7 +712,8 @@ class TSAnalysisPipeline(BasePipeline):
                 "params": params
             }
         except Exception as e:
-            self._log(step="GARCH(1,1) estimation", decision=f"Failed: {str(e)}")
+            self._log(step="GARCH(1,1) estimation", decision=f"Failed: {str(e)}",
+                      verdict="warn")
             return {"fitted": False}
 
     def select_distribution(self, residuals: np.ndarray) -> str:
@@ -667,27 +721,30 @@ class TSAnalysisPipeline(BasePipeline):
         dist = "t" if pvalue < 0.05 else "normal"
         self._log(
             step="Jarque-Bera (distribution)",
-            decision="Student-t" if dist == "t" else "Normal",
-            pvalue=pvalue
+            decision="Student-t residuals" if dist == "t" else "Normal residuals",
+            pvalue=pvalue,
+            verdict="ok",
         )
         return dist
 
     # ── 11. Run ───────────────────────────────
 
     def run(self) -> dict:
-        series = self.data.copy()
+        series_original = self.data.copy()
 
         # Шаг 1: очистка выбросов
-        series = self.remove_outliers(series)
+        self._current_phase = "pre_analysis"
+        series = self.remove_outliers(series_original.copy())
 
         # Шаг 2: сезонность
         seasonal_m = self.detect_seasonality(series)
 
         # Шаг 3: стационарность на ПОЛНОМ ряду
-        self._log(step="--- Full series pre-analysis ---", decision="")
+        self._log(step="--- Full series pre-analysis ---", decision="", verdict="info")
         stationary_full, d_full = self.make_stationary(series.copy())
 
         # Шаг 4а: break detection в уровне/тренде (голосование 2/3)
+        self._current_phase = "break_detection"
         breakpoints = self.find_breakpoints(series, stationary_full)
         pelt_candidates = getattr(self, "_pelt_candidates", [])
 
@@ -701,15 +758,17 @@ class TSAnalysisPipeline(BasePipeline):
                 self._log(
                     step="Break co-location check",
                     decision=(
-                        f"⚠️ Mean-break candidate t={m_bp} coincides with variance break "
-                        f"t={v_bp} (Δ={abs(m_bp - v_bp)} obs) — likely volatility regime shift. "
+                        f"Mean-break candidate t={m_bp} coincides with variance break "
+                        f"t={v_bp} (delta={abs(m_bp - v_bp)} obs) — likely volatility regime shift. "
                         f"GARCH on full series is a parsimonious alternative to mean segmentation."
-                    )
+                    ),
+                    verdict="warn",
                 )
         elif pelt_candidates:
             self._log(
                 step="Break co-location check",
-                decision="No variance break near mean-break candidate(s) — shift likely in mean/trend ✓"
+                decision="No variance break near mean-break candidate(s) — shift likely in mean/trend",
+                verdict="ok",
             )
 
         # Шаг 4г: OOS сравнение + финальный арбитраж по политике:
@@ -727,14 +786,16 @@ class TSAnalysisPipeline(BasePipeline):
                     self._log(
                         step="Final segmentation decision",
                         decision=(
-                            f"✓ Segmenting by vote ({votes}/3). "
+                            f"Segmenting by vote ({votes}/3). "
                             f"OOS RMSE prefers unified — informational signal only."
-                        )
+                        ),
+                        verdict="ok",
                     )
                 else:
                     self._log(
                         step="Final segmentation decision",
-                        decision=f"✓ Segmentation confirmed by vote ({votes}/3) and OOS RMSE ✓"
+                        decision=f"Segmentation confirmed by vote ({votes}/3) and OOS RMSE",
+                        verdict="ok",
                     )
                 # breakpoints уже выставлены find_breakpoints
 
@@ -744,10 +805,11 @@ class TSAnalysisPipeline(BasePipeline):
                     self._log(
                         step="Final segmentation decision",
                         decision=(
-                            f"⚠️ Break-vote 1/3 (PELT only), but variance co-location + OOS both confirm "
-                            f"→ segmenting at {pelt_candidates}. "
+                            f"Break-vote 1/3 (PELT only), but variance co-location + OOS both confirm "
+                            f"— segmenting at {pelt_candidates}. "
                             f"Consider GARCH on full series as parsimonious alternative."
-                        )
+                        ),
+                        verdict="warn",
                     )
                     breakpoints = pelt_candidates
                 else:
@@ -758,27 +820,33 @@ class TSAnalysisPipeline(BasePipeline):
                     )
                     self._log(
                         step="Final segmentation decision",
-                        decision=f"Break-vote 1/3 (PELT only), {reason} → no segmentation ✓"
+                        decision=f"Break-vote 1/3 (PELT only), {reason} — no segmentation",
+                        verdict="ok",
                     )
 
         # Шаг 5: разбивка ИСХОДНОГО ряда
         segments_raw = []
+        seg_bounds = []
         prev = 0
         for bp in breakpoints + [len(series)]:
             segments_raw.append(series.iloc[prev:bp])
+            seg_bounds.append((prev, bp))
             prev = bp
 
         # Шаг 6: анализ каждого сегмента
         segment_models = []
-        for i, seg in enumerate(segments_raw):
+        for i, (seg, (seg_start, seg_end)) in enumerate(zip(segments_raw, seg_bounds)):
+            self._current_phase = f"segment_{i+1}"
             if len(seg) < 20:
                 self._log(
                     step=f"Segment {i+1} ({len(seg)} obs)",
-                    decision="Skipped — too short (<20 obs)"
+                    decision="Skipped — too short (<20 obs)",
+                    verdict="warn",
                 )
                 continue
 
-            self._log(step=f"--- Segment {i+1} ({len(seg)} obs) ---", decision="")
+            self._log(step=f"--- Segment {i+1} ({len(seg)} obs) ---", decision="",
+                      verdict="info")
 
             # стационарность сегмента
             stationary_seg, d = self.make_stationary(seg)
@@ -810,7 +878,8 @@ class TSAnalysisPipeline(BasePipeline):
                 if seasonal_insig:
                     self._log(
                         step="SARIMA seasonal fallback",
-                        decision=f"Insignificant seasonal coefs {seasonal_insig} → trying ARIMA"
+                        decision=f"Insignificant seasonal coefs {seasonal_insig} — trying ARIMA",
+                        verdict="info",
                     )
                     try:
                         model_noseas = ARIMA(stationary_seg, order=(p, 0, q)).fit()
@@ -821,15 +890,18 @@ class TSAnalysisPipeline(BasePipeline):
                             coef_report, insignificant = self.check_coef_significance(model)
                             self._log(
                                 step="SARIMA seasonal fallback",
-                                decision=f"ARIMA({p},{d},{q}) preferred by BIC ✓"
+                                decision=f"ARIMA({p},{d},{q}) preferred by BIC",
+                                verdict="ok",
                             )
                         else:
                             self._log(
                                 step="SARIMA seasonal fallback",
-                                decision="SARIMA kept — BIC still lower"
+                                decision="SARIMA kept — BIC still lower",
+                                verdict="info",
                             )
                     except Exception as e:
-                        self._log(step="SARIMA seasonal fallback", decision=f"Failed: {str(e)}")
+                        self._log(step="SARIMA seasonal fallback", decision=f"Failed: {str(e)}",
+                                  verdict="warn")
 
             # AIC/BIC конфликт
             aic_bic_info = self.check_aic_bic_conflict(stationary_seg, p, q, d, m, P, Q)
@@ -851,10 +923,12 @@ class TSAnalysisPipeline(BasePipeline):
                             coef_report, insignificant = self.check_coef_significance(model)
                             self._log(
                                 step="Model update after walk-forward",
-                                decision=f"Switched to {bic_label} based on RMSE"
+                                decision=f"Switched to {bic_label} based on RMSE",
+                                verdict="ok",
                             )
                     except Exception as e:
-                        self._log(step="Walk-forward", decision=f"Skipped: {str(e)}")
+                        self._log(step="Walk-forward", decision=f"Skipped: {str(e)}",
+                                  verdict="info")
 
             # диагностика остатков
             lb_ok = self.test_ljungbox(resid)
@@ -875,6 +949,8 @@ class TSAnalysisPipeline(BasePipeline):
             segment_models.append({
                 "segment": i + 1,
                 "obs": len(seg),
+                "start_t": seg_start,
+                "end_t": seg_end,
                 "model_type": model_label,
                 "equation": equation,
                 "arma_order": [p, q],
@@ -894,6 +970,9 @@ class TSAnalysisPipeline(BasePipeline):
             })
 
         self.results["pipeline_type"] = "timeseries"
+        self.results["series_values"] = [round(float(v), 6) for v in series.values]
+        self.results["series_original"] = [round(float(v), 6) for v in series_original.values]
+        self.results["outliers"] = getattr(self, "_outlier_info", [])
         self.results["segments"] = segment_models
         self.results["breakpoints"] = breakpoints
         self.results["variance_breakpoints"] = variance_bkps
