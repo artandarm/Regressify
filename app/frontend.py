@@ -33,7 +33,7 @@ if uploaded:
 
     if st.button("🚀 Запустить анализ", type="primary"):
         with st.spinner("Прогоняем тесты... (~20 сек)"):
-            res = requests.post(f"{API}/analyze", params={"column": column})
+            res = requests.post(f"{API}/analyze/ts", params={"column": column})
 
         if res.status_code != 200:
             st.error(f"Ошибка: {res.text}")
@@ -41,9 +41,16 @@ if uploaded:
             data = res.json()
             breakpoints = data["breakpoints"]
 
+            # ── Метаинфо ─────────────────────────────────────────
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Сегментов", len(data["segments"]))
+            col2.metric("Точек разрыва", len(breakpoints))
+            sp = data.get("seasonal_period")
+            col3.metric("Сезонный период", f"m={sp}" if sp else "Нет")
+
             # ── График ряда с разрывами ──────────────────────────
             st.subheader("📊 Временной ряд и точки разрыва")
-            colors = ["#636EFA","#EF553B","#00CC96","#AB63FA","#FFA15A","#19D3F3"]
+            colors = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3"]
             fig = go.Figure()
 
             segments_bounds = [0] + breakpoints + [len(series_vals)]
@@ -77,37 +84,48 @@ if uploaded:
             st.subheader("🔍 Пошаговый лог тестов")
             for entry in data["log"]:
                 if entry["step"].startswith("---"):
-                    st.markdown(f"**{entry['step'].replace('---','').strip()}**")
+                    st.markdown(f"**{entry['step'].replace('---', '').strip()}**")
                     st.divider()
                 else:
                     pv = f" &nbsp;`p={entry['pvalue']}`" if "pvalue" in entry else ""
-                    good = any(x in entry["decision"] for x in ["✓","Stationary","Normal","Student","Applied"])
-                    icon = "✅" if good else "🔹"
-                    st.markdown(f"{icon} **{entry['step']}** → {entry['decision']}{pv}", unsafe_allow_html=True)
+                    good = any(x in entry["decision"] for x in [
+                        "✓", "Stationary", "Normal", "Student", "Applied", "No seasonality", "Seasonal"
+                    ])
+                    warn = any(x in entry["decision"] for x in ["ARCH effect detected", "Autocorrelation detected", "Skipped"])
+                    icon = "✅" if good else ("⚠️" if warn else "🔹")
+                    st.markdown(
+                        f"{icon} **{entry['step']}** → {entry['decision']}{pv}",
+                        unsafe_allow_html=True
+                    )
 
             # ── Таблица моделей ───────────────────────────────────
             st.subheader("📋 Итоговые модели по сегментам")
             rows = []
             for seg in data["segments"]:
-                p, q = seg["arma_order"]
+                garch = seg.get("garch", {})
                 rows.append({
                     "Сегмент": seg["segment"],
                     "Наблюдений": seg["obs"],
-                    "d": seg["d"],
-                    "Модель": f"ARIMA({p},{seg['d']},{q})",
+                    "Модель": seg.get("model_type", "—"),
                     "AIC": seg["aic"],
                     "BIC": seg["bic"],
                     "Ljung-Box": "✅ OK" if seg["ljungbox_ok"] else "❌ Автокорр.",
                     "ARCH-эффект": "⚠️ Есть" if seg["arch_effect"] else "✅ Нет",
+                    "GARCH(1,1)": "✅ Оценён" if garch.get("fitted") else "—",
                     "Распределение": "Student-t" if seg["distribution"] == "t" else "Normal",
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            # ── Коэффициенты ──────────────────────────────────────
+            # ── Коэффициенты + GARCH ──────────────────────────────
             st.subheader("🔢 Коэффициенты моделей")
             cols = st.columns(min(len(data["segments"]), 3))
             for i, seg in enumerate(data["segments"]):
-                p, q = seg["arma_order"]
                 with cols[i % 3]:
-                    st.markdown(f"**Сегмент {seg['segment']}** — ARIMA({p},{seg['d']},{q})")
+                    st.markdown(f"**Сегмент {seg['segment']}** — {seg.get('model_type', '—')}")
                     st.json(seg["coefficients"])
+
+                    garch = seg.get("garch", {})
+                    if garch.get("fitted"):
+                        st.markdown("**GARCH(1,1) параметры:**")
+                        st.json(garch["params"])
+                        st.caption(f"AIC: {garch['aic']} | BIC: {garch['bic']}")
