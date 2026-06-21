@@ -97,7 +97,60 @@ class TSAnalysisPipeline(BasePipeline):
             self._log(step=f"Differencing d={d}", decision="Applied diff()")
         return series, d
 
-    # ── 4. Model selection ────────────────────
+    # ── 4. Structural breaks ──────────────────
+
+    def find_breakpoints(self, series: pd.Series, stationary_series: pd.Series) -> list:
+        arr = stationary_series.values
+
+        # sanity-check: калибруем pen на synthetic random walk
+        np.random.seed(42)
+        rw = np.cumsum(np.random.normal(0, np.std(arr), len(arr)))
+        rw_diff = np.diff(rw)
+        algo_rw = rpt.Pelt(model="rbf").fit(rw_diff)
+        pen = 10
+        while len(algo_rw.predict(pen=pen)) > 3 and pen < 200:
+            pen += 10
+        self._log(
+            step="PELT penalty calibration (sanity-check RW)",
+            decision=f"Calibrated pen={pen} (RW false positives suppressed)"
+        )
+
+        # PELT на стационарном ряду
+        algo = rpt.Pelt(model="rbf").fit(arr)
+        breakpoints = algo.predict(pen=pen)
+        breakpoints = [b for b in breakpoints if b < len(series)]
+
+        # CUSUM кросс-валидация
+        try:
+            from statsmodels.stats.diagnostic import breaks_cusumolsresid
+            cusum_model = ARIMA(stationary_series, order=(1, 0, 0)).fit()
+            cusum_result = breaks_cusumolsresid(cusum_model.resid)
+            cusum_pvalue = float(cusum_result[1])
+            cusum_breaks = cusum_pvalue < 0.05
+            self._log(
+                step="CUSUM cross-validation",
+                decision=(
+                    "CUSUM confirms breaks ✓" if cusum_breaks
+                    else "⚠️ CUSUM finds no breaks — PELT may be overfitting"
+                ),
+                pvalue=cusum_pvalue
+            )
+            if not cusum_breaks and len(breakpoints) > 0:
+                self._log(
+                    step="Structural breaks (PELT)",
+                    decision=f"⚠️ PELT found {len(breakpoints)} break(s) but CUSUM disagrees → treating as no breaks"
+                )
+                return []
+        except Exception as e:
+            self._log(step="CUSUM cross-validation", decision=f"Skipped: {str(e)}")
+
+        self._log(
+            step="Structural breaks (PELT)",
+            decision=f"Found {len(breakpoints)} breakpoint(s): {breakpoints}"
+        )
+        return breakpoints
+
+    # ── 5. Model selection ────────────────────
 
     def select_arma_order(self, series: pd.Series, seasonal_m=None):
         if seasonal_m:
@@ -153,7 +206,7 @@ class TSAnalysisPipeline(BasePipeline):
             )
             return p, q, 0, 0, None
 
-    # ── 5. Coefficient significance ───────────
+    # ── 6. Coefficient significance ───────────
 
     def check_coef_significance(self, model) -> tuple:
         pvalues = model.pvalues
@@ -185,7 +238,7 @@ class TSAnalysisPipeline(BasePipeline):
 
         return coef_report, insignificant
 
-    # ── 6. AIC/BIC conflict check ─────────────
+    # ── 7. AIC/BIC conflict check ─────────────
 
     def check_aic_bic_conflict(self, series: pd.Series, p: int, q: int,
                                 d: int, m=None, P=0, Q=0) -> dict:
@@ -242,7 +295,7 @@ class TSAnalysisPipeline(BasePipeline):
             self._log(step="AIC/BIC conflict check", decision=f"Skipped: {str(e)}")
             return {"conflict": False}
 
-    # ── 7. Walk-forward validation ────────────
+    # ── 8. Walk-forward validation ────────────
 
     def walk_forward(self, series: pd.Series, p: int, q: int, d: int,
                      p2: int, q2: int, test_size: float = 0.2) -> dict:
@@ -286,7 +339,7 @@ class TSAnalysisPipeline(BasePipeline):
 
         return {"rmse": rmse, "winner": winner}
 
-    # ── 8. Diagnostics ────────────────────────
+    # ── 9. Diagnostics ────────────────────────
 
     def test_ljungbox(self, residuals: np.ndarray) -> bool:
         result = acorr_ljungbox(residuals, lags=[10], return_df=True)
@@ -338,19 +391,6 @@ class TSAnalysisPipeline(BasePipeline):
         )
         return dist
 
-    # ── 9. Structural breaks ──────────────────
-
-    def find_breakpoints(self, series: pd.Series) -> list:
-        arr = series.values
-        algo = rpt.Pelt(model="rbf").fit(arr)
-        breakpoints = algo.predict(pen=10)
-        breakpoints = [b for b in breakpoints if b < len(arr)]
-        self._log(
-            step="Structural breaks (PELT)",
-            decision=f"Found {len(breakpoints)} breakpoint(s): {breakpoints}"
-        )
-        return breakpoints
-
     # ── 10. Run ───────────────────────────────
 
     def run(self) -> dict:
@@ -362,17 +402,21 @@ class TSAnalysisPipeline(BasePipeline):
         # Шаг 2: сезонность
         seasonal_m = self.detect_seasonality(series)
 
-        # Шаг 3: структурные разрывы
-        breakpoints = self.find_breakpoints(series)
+        # Шаг 3: стационарность на ПОЛНОМ ряду
+        self._log(step="--- Full series pre-analysis ---", decision="")
+        stationary_full, d_full = self.make_stationary(series.copy())
 
-        # Шаг 4: разбивка на сегменты
+        # Шаг 4: PELT на стационарном ряду → точки к исходному
+        breakpoints = self.find_breakpoints(series, stationary_full)
+
+        # Шаг 5: разбивка ИСХОДНОГО ряда
         segments_raw = []
         prev = 0
         for bp in breakpoints + [len(series)]:
             segments_raw.append(series.iloc[prev:bp])
             prev = bp
 
-        # Шаг 5: анализ каждого сегмента
+        # Шаг 6: анализ каждого сегмента
         segment_models = []
         for i, seg in enumerate(segments_raw):
             if len(seg) < 20:
@@ -384,7 +428,7 @@ class TSAnalysisPipeline(BasePipeline):
 
             self._log(step=f"--- Segment {i+1} ({len(seg)} obs) ---", decision="")
 
-            # стационарность
+            # стационарность сегмента
             stationary_seg, d = self.make_stationary(seg)
 
             # подбор порядка
@@ -404,6 +448,33 @@ class TSAnalysisPipeline(BasePipeline):
 
             # значимость коэффициентов
             coef_report, insignificant = self.check_coef_significance(model)
+
+            # fallback SARIMA → ARIMA если сезонные коэфы незначимы
+            if m and insignificant:
+                seasonal_insig = [c for c in insignificant if "S." in c or "seasonal" in c.lower()]
+                if seasonal_insig:
+                    self._log(
+                        step="SARIMA seasonal fallback",
+                        decision=f"Insignificant seasonal coefs {seasonal_insig} → trying ARIMA"
+                    )
+                    try:
+                        model_noseas = ARIMA(stationary_seg, order=(p, 0, q)).fit()
+                        if model_noseas.bic < model.bic:
+                            model = model_noseas
+                            m, P, Q = None, 0, 0
+                            resid = model.resid.values
+                            coef_report, insignificant = self.check_coef_significance(model)
+                            self._log(
+                                step="SARIMA seasonal fallback",
+                                decision=f"ARIMA({p},{d},{q}) preferred by BIC ✓"
+                            )
+                        else:
+                            self._log(
+                                step="SARIMA seasonal fallback",
+                                decision="SARIMA kept — BIC still lower"
+                            )
+                    except Exception as e:
+                        self._log(step="SARIMA seasonal fallback", decision=f"Failed: {str(e)}")
 
             # AIC/BIC конфликт
             aic_bic_info = self.check_aic_bic_conflict(stationary_seg, p, q, d, m, P, Q)

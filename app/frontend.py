@@ -23,16 +23,39 @@ if uploaded:
 
     column = st.selectbox("Выбери колонку с временным рядом", meta["columns"])
 
-    # Читаем ряд для графика
-    if uploaded.name.endswith(".csv"):
-        df = pd.read_csv(io.BytesIO(file_bytes))
-    else:
-        df = pd.read_excel(io.BytesIO(file_bytes))
+    # ── Читаем ряд для графика с умным детектом разделителя ──
+    try:
+        if uploaded.name.endswith(".csv"):
+            text = file_bytes.decode("utf-8", errors="replace")
+            lines = [l for l in text.split("\n") if l.strip()]
+            first_data = lines[1] if len(lines) > 1 else lines[0]
 
-    series_vals = df[column].dropna().values
+            if ";" in first_data:
+                df = pd.read_csv(io.BytesIO(file_bytes), sep=";", decimal=",")
+            else:
+                comma_count = first_data.count(",")
+                fields = first_data.split(",")
+                all_short = all(len(f.strip()) <= 4 for f in fields[1:])
+                if comma_count == 1 and all_short:
+                    df = pd.read_csv(io.BytesIO(file_bytes), sep="\t", decimal=",")
+                    if df.select_dtypes(include="number").shape[1] == 0:
+                        df = pd.read_csv(io.BytesIO(file_bytes), sep=",", decimal=",")
+                else:
+                    df = pd.read_csv(io.BytesIO(file_bytes), sep=",", decimal=".")
+        else:
+            df = pd.read_excel(io.BytesIO(file_bytes))
+    except Exception:
+        df = pd.read_csv(io.BytesIO(file_bytes))
+
+    # безопасное получение ряда
+    if column in df.columns:
+        series_vals = df[column].dropna().values
+    else:
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        series_vals = df[num_cols[0]].dropna().values if num_cols else []
 
     if st.button("🚀 Запустить анализ", type="primary"):
-        with st.spinner("Прогоняем тесты... (~20 сек)"):
+        with st.spinner("Прогоняем тесты... (~30 сек)"):
             res = requests.post(f"{API}/analyze/ts", params={"column": column})
 
         if res.status_code != 200:
@@ -48,7 +71,7 @@ if uploaded:
             sp = data.get("seasonal_period")
             col3.metric("Сезонный период", f"m={sp}" if sp else "Нет")
 
-            # ── График ряда с разрывами ──────────────────────────
+            # ── График ряда с разрывами ───────────────────────────
             st.subheader("📊 Временной ряд и точки разрыва")
             colors = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3"]
             fig = go.Figure()
@@ -80,7 +103,7 @@ if uploaded:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # ── Лог шагов ────────────────────────────────────────
+            # ── Лог шагов ─────────────────────────────────────────
             st.subheader("🔍 Пошаговый лог тестов")
             for entry in data["log"]:
                 if entry["step"].startswith("---"):
@@ -89,9 +112,13 @@ if uploaded:
                 else:
                     pv = f" &nbsp;`p={entry['pvalue']}`" if "pvalue" in entry else ""
                     good = any(x in entry["decision"] for x in [
-                        "✓", "Stationary", "Normal", "Student", "Applied", "No seasonality", "Seasonal"
+                        "✓", "Stationary", "Normal", "Student", "Applied",
+                        "No seasonality", "Seasonal", "agree", "Switched"
                     ])
-                    warn = any(x in entry["decision"] for x in ["ARCH effect detected", "Autocorrelation detected", "Skipped"])
+                    warn = any(x in entry["decision"] for x in [
+                        "ARCH effect detected", "Autocorrelation detected",
+                        "Skipped", "⚠️", "Insignificant"
+                    ])
                     icon = "✅" if good else ("⚠️" if warn else "🔹")
                     st.markdown(
                         f"{icon} **{entry['step']}** → {entry['decision']}{pv}",
@@ -103,15 +130,19 @@ if uploaded:
             rows = []
             for seg in data["segments"]:
                 garch = seg.get("garch", {})
+                conflict = seg.get("aic_bic_conflict", {})
+                wf = seg.get("walk_forward", {})
                 rows.append({
                     "Сегмент": seg["segment"],
                     "Наблюдений": seg["obs"],
                     "Модель": seg.get("model_type", "—"),
                     "AIC": seg["aic"],
                     "BIC": seg["bic"],
+                    "AIC/BIC": "⚠️ Конфликт" if conflict.get("conflict") else "✅ Согласны",
+                    "Walk-forward": wf.get("winner", "—").replace("ARIMA", "") if wf else "—",
                     "Ljung-Box": "✅ OK" if seg["ljungbox_ok"] else "❌ Автокорр.",
-                    "ARCH-эффект": "⚠️ Есть" if seg["arch_effect"] else "✅ Нет",
-                    "GARCH(1,1)": "✅ Оценён" if garch.get("fitted") else "—",
+                    "ARCH": "⚠️ Есть" if seg["arch_effect"] else "✅ Нет",
+                    "GARCH(1,1)": "✅" if garch.get("fitted") else "—",
                     "Распределение": "Student-t" if seg["distribution"] == "t" else "Normal",
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -122,10 +153,39 @@ if uploaded:
             for i, seg in enumerate(data["segments"]):
                 with cols[i % 3]:
                     st.markdown(f"**Сегмент {seg['segment']}** — {seg.get('model_type', '—')}")
-                    st.json(seg["coefficients"])
 
+                    # незначимые коэффициенты — предупреждение
+                    insig = seg.get("insignificant_coefs", [])
+                    if insig:
+                        st.warning(f"Незначимые коэффициенты: {', '.join(insig)}")
+
+                    # таблица коэффициентов с p-values
+                    coef_rows = []
+                    for name, info in seg["coefficients"].items():
+                        coef_rows.append({
+                            "Коэффициент": name,
+                            "Значение": info["coef"],
+                            "p-value": info["pvalue"],
+                            "Значим": "✅" if info["significant"] else "❌"
+                        })
+                    if coef_rows:
+                        st.dataframe(
+                            pd.DataFrame(coef_rows),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                    # GARCH
                     garch = seg.get("garch", {})
                     if garch.get("fitted"):
                         st.markdown("**GARCH(1,1) параметры:**")
-                        st.json(garch["params"])
+                        garch_rows = [
+                            {"Параметр": k, "Значение": v}
+                            for k, v in garch["params"].items()
+                        ]
+                        st.dataframe(
+                            pd.DataFrame(garch_rows),
+                            use_container_width=True,
+                            hide_index=True
+                        )
                         st.caption(f"AIC: {garch['aic']} | BIC: {garch['bic']}")
