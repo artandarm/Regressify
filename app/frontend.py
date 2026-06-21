@@ -23,13 +23,12 @@ if uploaded:
 
     column = st.selectbox("Выбери колонку с временным рядом", meta["columns"])
 
-    # ── Читаем ряд для графика с умным детектом разделителя ──
+    # ── Умный парсинг для графика ─────────────
     try:
         if uploaded.name.endswith(".csv"):
             text = file_bytes.decode("utf-8", errors="replace")
             lines = [l for l in text.split("\n") if l.strip()]
             first_data = lines[1] if len(lines) > 1 else lines[0]
-
             if ";" in first_data:
                 df = pd.read_csv(io.BytesIO(file_bytes), sep=";", decimal=",")
             else:
@@ -47,7 +46,6 @@ if uploaded:
     except Exception:
         df = pd.read_csv(io.BytesIO(file_bytes))
 
-    # безопасное получение ряда
     if column in df.columns:
         series_vals = df[column].dropna().values
     else:
@@ -64,14 +62,14 @@ if uploaded:
             data = res.json()
             breakpoints = data["breakpoints"]
 
-            # ── Метаинфо ─────────────────────────────────────────
+            # ── Метаинфо ──────────────────────────────────────────
             col1, col2, col3 = st.columns(3)
             col1.metric("Сегментов", len(data["segments"]))
             col2.metric("Точек разрыва", len(breakpoints))
             sp = data.get("seasonal_period")
             col3.metric("Сезонный период", f"m={sp}" if sp else "Нет")
 
-            # ── График ряда с разрывами ───────────────────────────
+            # ── График ряда с разрывами ────────────────────────────
             st.subheader("📊 Временной ряд и точки разрыва")
             colors = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3"]
             fig = go.Figure()
@@ -113,7 +111,7 @@ if uploaded:
                     pv = f" &nbsp;`p={entry['pvalue']}`" if "pvalue" in entry else ""
                     good = any(x in entry["decision"] for x in [
                         "✓", "Stationary", "Normal", "Student", "Applied",
-                        "No seasonality", "Seasonal", "agree", "Switched"
+                        "No seasonality", "Seasonal", "agree", "Switched", "confirms"
                     ])
                     warn = any(x in entry["decision"] for x in [
                         "ARCH effect detected", "Autocorrelation detected",
@@ -147,14 +145,53 @@ if uploaded:
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            # ── Коэффициенты + GARCH ──────────────────────────────
+            # ── Model averaging (только при неоднозначном выборе) ─
+            ambiguous_segs = [
+                s for s in data["segments"]
+                if s.get("model_candidates", {}).get("ambiguous")
+            ]
+            if ambiguous_segs:
+                st.subheader("📊 Model averaging — неоднозначный выбор")
+                st.caption(
+                    "Akaike weight топ-кандидата < 0.70: доказательства размазаны между моделями. "
+                    "Таблица показывает in-sample (AIC/BIC/вес) и out-of-sample (RMSE) сравнение."
+                )
+                for seg in ambiguous_segs:
+                    mc = seg["model_candidates"]
+                    st.markdown(
+                        f"**Сегмент {seg['segment']}** — "
+                        f"топ-вес {mc['top_weight']:.0%}, "
+                        f"{len(mc['candidates'])} кандидата"
+                    )
+                    cand_rows = []
+                    for i, c in enumerate(mc["candidates"]):
+                        cand_rows.append({
+                            "Модель": ("★ " if i == 0 else "  ") + c["label"],
+                            "AIC": c["aic"],
+                            "BIC": c["bic"],
+                            "Вес Akaike": f"{c['weight'] * 100:.1f}%",
+                            "OOS RMSE": c["rmse"] if c["rmse"] is not None else "—",
+                        })
+                    st.dataframe(
+                        pd.DataFrame(cand_rows),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+            # ── Коэффициенты + уравнение + GARCH ─────────────────
             st.subheader("🔢 Коэффициенты моделей")
             cols = st.columns(min(len(data["segments"]), 3))
             for i, seg in enumerate(data["segments"]):
                 with cols[i % 3]:
                     st.markdown(f"**Сегмент {seg['segment']}** — {seg.get('model_type', '—')}")
 
-                    # незначимые коэффициенты — предупреждение
+                    # уравнение LaTeX
+                    eq = seg.get("equation", "")
+                    if eq:
+                        st.markdown("**Уравнение процесса:**")
+                        st.latex(eq)
+
+                    # предупреждение о незначимых коэфах
                     insig = seg.get("insignificant_coefs", [])
                     if insig:
                         st.warning(f"Незначимые коэффициенты: {', '.join(insig)}")
