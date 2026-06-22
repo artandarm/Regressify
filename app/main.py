@@ -277,10 +277,16 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"File read error: {str(e)}")
 
+    DEV_ROW_LIMIT = 10_000
+    total_rows = len(df)
+    if total_rows > DEV_ROW_LIMIT:
+        df = df.iloc[:DEV_ROW_LIMIT].copy()
+
     _uploaded_df["data"] = df
     return {
         "filename": file.filename,
         "rows": len(df),
+        "total_rows": total_rows,
         "columns": list(df.columns),
         "preview": df.head(5).to_dict(orient="records"),
     }

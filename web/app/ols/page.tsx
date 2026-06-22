@@ -80,6 +80,11 @@ export default function OlsPage() {
                 <p className="text-sm text-prose font-medium">{upload.filename}</p>
                 <p className="text-xs text-secondary">
                   {upload.rows} rows · {upload.columns.length} columns
+                  {upload.total_rows > upload.rows && (
+                    <span className="ml-1.5 text-yellow-400">
+                      (file has {upload.total_rows.toLocaleString()} rows — truncated to first {upload.rows.toLocaleString()})
+                    </span>
+                  )}
                 </p>
               </div>
               <span className="text-xs text-muted hover:text-secondary">change ×</span>

@@ -93,6 +93,7 @@ export interface TSAnalysisResponse {
 export interface UploadResult {
   filename: string;
   rows: number;
+  total_rows: number;
   columns: string[];
   preview: Record<string, unknown>[];
 }
