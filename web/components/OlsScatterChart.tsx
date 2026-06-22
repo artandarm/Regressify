@@ -20,12 +20,26 @@ export function OlsScatterChart({ yActual, yFitted, yCol, influentialIdx }: Prop
     inf: infSet.has(i),
   }));
 
-  const allVals = [...yActual, ...yFitted];
-  const minVal = Math.min(...allVals);
-  const maxVal = Math.max(...allVals);
-  const pad = (maxVal - minVal) * 0.08 || 1;
-  const lo = minVal - pad;
-  const hi = maxVal + pad;
+  // Independent axis domains — scale to each variable's own range
+  const minFitted = Math.min(...yFitted);
+  const maxFitted = Math.max(...yFitted);
+  const minActual = Math.min(...yActual);
+  const maxActual = Math.max(...yActual);
+  const padX = (maxFitted - minFitted) * 0.08 || 0.5;
+  const padY = (maxActual - minActual) * 0.08 || 0.5;
+  const xLo = minFitted - padX;
+  const xHi = maxFitted + padX;
+  const yLo = minActual - padY;
+  const yHi = maxActual + padY;
+
+  // OLS trend line: regress yActual on yFitted
+  const n = yActual.length;
+  const meanX = yFitted.reduce((s, v) => s + v, 0) / n;
+  const meanY = yActual.reduce((s, v) => s + v, 0) / n;
+  const ssXY = yFitted.reduce((s, v, i) => s + (v - meanX) * (yActual[i] - meanY), 0);
+  const ssXX = yFitted.reduce((s, v) => s + (v - meanX) ** 2, 0);
+  const slope = ssXX > 0 ? ssXY / ssXX : 0;
+  const intercept = meanY - slope * meanX;
 
   return (
     <div className="bg-layer rounded-xl border border-edge p-5">
@@ -35,8 +49,8 @@ export function OlsScatterChart({ yActual, yFitted, yCol, influentialIdx }: Prop
         </h3>
         <div className="flex items-center gap-4 text-xs text-muted">
           <span className="flex items-center gap-1.5">
-            <span className="inline-block w-5 border-t border-dashed border-accent opacity-60" />
-            Y = Ŷ
+            <span className="inline-block w-5 border-t-2 border-accent opacity-80" />
+            fit line
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-accent inline-block opacity-70" />
@@ -57,7 +71,7 @@ export function OlsScatterChart({ yActual, yFitted, yCol, influentialIdx }: Prop
           <XAxis
             dataKey="fitted"
             type="number"
-            domain={[lo, hi]}
+            domain={[xLo, xHi]}
             tick={{ fill: "#44445a", fontSize: 10 }}
             tickLine={false}
             axisLine={{ stroke: "#2a2a3a" }}
@@ -72,7 +86,7 @@ export function OlsScatterChart({ yActual, yFitted, yCol, influentialIdx }: Prop
           <YAxis
             dataKey="actual"
             type="number"
-            domain={[lo, hi]}
+            domain={[yLo, yHi]}
             tick={{ fill: "#44445a", fontSize: 10 }}
             tickLine={false}
             axisLine={false}
@@ -99,13 +113,14 @@ export function OlsScatterChart({ yActual, yFitted, yCol, influentialIdx }: Prop
             }
             labelFormatter={() => ""}
           />
-          {/* Perfect-fit diagonal Y = X */}
+          {/* Estimated regression line through the scatter */}
           <ReferenceLine
-            segment={[{ x: lo, y: lo }, { x: hi, y: hi }]}
+            segment={[
+              { x: xLo, y: intercept + slope * xLo },
+              { x: xHi, y: intercept + slope * xHi },
+            ]}
             stroke="#818cf8"
-            strokeWidth={1.5}
-            strokeDasharray="6 3"
-            strokeOpacity={0.55}
+            strokeWidth={2}
             ifOverflow="extendDomain"
           />
           <Scatter data={points} isAnimationActive={false}>

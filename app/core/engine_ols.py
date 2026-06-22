@@ -336,14 +336,18 @@ class OLSPipeline(BasePipeline):
 
     def build_ols_equation_latex(self, model, y_col: str, x_cols: list) -> str:
         """Строит LaTeX-уравнение для KaTeX рендеринга."""
+        def _tex(name: str) -> str:
+            # Replace underscores so KaTeX doesn't interpret them as subscripts
+            return name.replace("_", r"\_")
+
         const = round(float(model.params.get("const", 0)), 4)
         parts = [str(const)]
         for col in x_cols:
             if col in model.params.index:
                 coef = round(float(model.params[col]), 4)
                 sign = "+" if coef >= 0 else "-"
-                parts.append(f"{sign} {abs(coef)} \\cdot \\text{{{col}}}")
-        return r"\hat{\text{" + y_col + r"}} = " + " ".join(parts)
+                parts.append(f"{sign} {abs(coef)} \\cdot \\text{{{_tex(col)}}}")
+        return r"\hat{\text{" + _tex(y_col) + r"}} = " + " ".join(parts)
 
     def get_model_stats(self, model, use_robust: bool) -> dict:
         """Собирает сводную статистику модели."""
