@@ -93,6 +93,9 @@ export default function OlsPage() {
             <SectionLabel n={2} label="Select variables & run" done={false} />
             <div className="flex flex-col gap-5">
 
+              {/* Dataset preview */}
+              <DatasetPreview columns={upload.columns} rows={upload.preview} />
+
               {/* Y column */}
               <div>
                 <label className="block text-xs text-secondary mb-1.5">
@@ -409,6 +412,68 @@ function SectionLabel({ n, label, done }: { n: number; label: string; done: bool
         {done ? "✓" : n}
       </span>
       <span className="text-xs font-medium text-secondary uppercase tracking-wider">{label}</span>
+    </div>
+  );
+}
+
+function DatasetPreview({
+  columns,
+  rows,
+}: {
+  columns: string[];
+  rows: Record<string, unknown>[];
+}) {
+  return (
+    <div className="rounded-xl border border-edge overflow-hidden">
+      <div className="px-4 py-2.5 bg-layer border-b border-edge flex items-center justify-between">
+        <span className="text-xs font-medium text-secondary">
+          Dataset preview
+        </span>
+        <span className="text-xs text-muted font-mono">
+          {columns.length} columns · first {rows.length} rows
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-edge bg-raised">
+              {columns.map((col) => (
+                <th
+                  key={col}
+                  className="text-left px-3 py-2 text-secondary font-medium whitespace-nowrap"
+                >
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className="border-b border-edge last:border-0 hover:bg-raised">
+                {columns.map((col) => {
+                  const val = row[col];
+                  const isNum = typeof val === "number";
+                  return (
+                    <td
+                      key={col}
+                      className={[
+                        "px-3 py-2 font-mono whitespace-nowrap",
+                        isNum ? "text-prose text-right" : "text-secondary",
+                      ].join(" ")}
+                    >
+                      {val === null || val === undefined
+                        ? <span className="text-muted italic">—</span>
+                        : isNum
+                        ? (Number.isInteger(val) ? String(val) : (val as number).toFixed(4))
+                        : String(val)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
