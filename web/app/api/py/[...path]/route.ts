@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 
-const BACKEND = "http://localhost:8000";
+const BACKEND = "http://localhost:8080";
 
 export const dynamic = "force-dynamic";
 

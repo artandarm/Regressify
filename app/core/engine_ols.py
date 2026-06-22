@@ -605,11 +605,28 @@ class OLSPipeline(BasePipeline):
         # ── Блок А: предобработка ─────────────────────────────────
         self._current_phase = "pre_analysis"
 
-        y_type = self.detect_y_type(df[self.y_col])
+        y_numeric = pd.to_numeric(df[self.y_col], errors="coerce")
+        y_type = self.detect_y_type(y_numeric.dropna())
         df_clean = self.handle_missing(df)
 
-        y = df_clean[self.y_col].astype(float)
-        X = df_clean[self.x_cols].astype(float)
+        y = pd.to_numeric(df_clean[self.y_col], errors="coerce").astype(float)
+        X = df_clean[self.x_cols].apply(pd.to_numeric, errors="coerce").astype(float)
+
+        # Drop rows that became NaN after numeric coercion (bad values like "49.0   1.0")
+        mask = y.notna() & X.notna().all(axis=1)
+        n_coerce_dropped = (~mask).sum()
+        if n_coerce_dropped > 0:
+            self._log(
+                step="Non-parseable values",
+                decision=(
+                    f"{n_coerce_dropped} row(s) dropped: values could not be parsed as numbers "
+                    f"(e.g. merged fields, text in numeric columns)"
+                ),
+                verdict="warn",
+            )
+            y = y[mask]
+            X = X[mask]
+
         n = len(y)
 
         # ── Блок Б: мультиколлинеарность ─────────────────────────

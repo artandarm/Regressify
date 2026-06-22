@@ -268,8 +268,11 @@ async def upload_file(file: UploadFile = File(...)):
             else:
                 sep, decimal = ",", "."
 
-        df = pd.read_csv(io.BytesIO(contents), sep=sep, decimal=decimal)
+        df = pd.read_csv(io.BytesIO(contents), sep=sep, decimal=decimal,
+                         skipinitialspace=True)
         df = df.dropna(how="all")
+        # Strip leading/trailing whitespace from column names
+        df.columns = [c.strip().strip('"').strip("'").strip() for c in df.columns]
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"File read error: {str(e)}")
@@ -430,6 +433,23 @@ async def analyze_ols(req: OLSRequest):
     missing = [c for c in [req.y_col] + req.x_cols if c not in df.columns]
     if missing:
         raise HTTPException(status_code=400, detail=f"Columns not found: {missing}")
+
+    # Reject columns that are mostly non-numeric (< 30% parseable as float)
+    non_numeric = []
+    for col in [req.y_col] + req.x_cols:
+        coerced = pd.to_numeric(df[col], errors="coerce")
+        parseable = coerced.notna().mean()
+        if parseable < 0.30:
+            non_numeric.append(col)
+    if non_numeric:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"OLS requires numeric columns. "
+                f"These columns contain non-numeric data: {non_numeric}. "
+                f"Select only numeric columns for Y and X."
+            ),
+        )
 
     try:
         pipeline = OLSPipeline(df, req.y_col, req.x_cols)
