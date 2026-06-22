@@ -378,6 +378,9 @@ class OLSAnalysisResponse(BaseModel):
     y_type: Literal["continuous", "binary", "count"]
     model_type: Literal["OLS", "OLS_robust_HC3"]
     equation: str
+    equation_latex: str
+    y_actual: list[float]
+    y_fitted: list[float]
     coefficients: list[OLSCoefficient]
     insignificant_coefs: list[str]
     r_squared: float
@@ -481,6 +484,9 @@ async def analyze_ols(req: OLSRequest):
         y_type=raw["y_type"],
         model_type=raw["model_type"],
         equation=raw["equation"],
+        equation_latex=raw["equation_latex"],
+        y_actual=raw["y_actual"],
+        y_fitted=raw["y_fitted"],
         coefficients=coefficients,
         insignificant_coefs=raw.get("insignificant_coefs", []),
         r_squared=raw["r_squared"],

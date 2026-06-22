@@ -334,6 +334,17 @@ class OLSPipeline(BasePipeline):
                 parts.append(f"{sign} {abs(coef)}·{col}")
         return f"{y_col} = " + " ".join(parts)
 
+    def build_ols_equation_latex(self, model, y_col: str, x_cols: list) -> str:
+        """Строит LaTeX-уравнение для KaTeX рендеринга."""
+        const = round(float(model.params.get("const", 0)), 4)
+        parts = [str(const)]
+        for col in x_cols:
+            if col in model.params.index:
+                coef = round(float(model.params[col]), 4)
+                sign = "+" if coef >= 0 else "-"
+                parts.append(f"{sign} {abs(coef)} \\cdot \\text{{{col}}}")
+        return r"\hat{\text{" + y_col + r"}} = " + " ".join(parts)
+
     def get_model_stats(self, model, use_robust: bool) -> dict:
         """Собирает сводную статистику модели."""
         return {
@@ -717,6 +728,10 @@ class OLSPipeline(BasePipeline):
         self.test_autocorrelation(resid, X_final)
 
         # ── Результат ─────────────────────────────────────────────
+        equation_latex = self.build_ols_equation_latex(
+            final_model, self.y_col, list(X_final.columns)
+        )
+
         self.results = {
             "pipeline_type": "ols",
             "y_col": self.y_col,
@@ -729,6 +744,9 @@ class OLSPipeline(BasePipeline):
             "condition_number": round(cond_number, 2),
             "model_type": model_stats["model_type"],
             "equation": equation,
+            "equation_latex": equation_latex,
+            "y_actual": [round(float(v), 6) for v in y.values],
+            "y_fitted": [round(float(v), 6) for v in final_model.fittedvalues.values],
             "coefficients": coef_report,
             "insignificant_coefs": insignificant,
             "r_squared": model_stats["r_squared"],

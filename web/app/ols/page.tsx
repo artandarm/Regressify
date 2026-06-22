@@ -2,10 +2,13 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { uploadFile, analyzeOls } from "@/lib/api";
 import type { UploadResult, OLSAnalysisResponse, VifEntry } from "@/lib/types";
 import { FileUpload, SpinnerFull } from "@/components/FileUpload";
 import { OlsPipelineLog } from "@/components/OlsPipelineLog";
+import { OlsScatterChart } from "@/components/OlsScatterChart";
 
 export default function OlsPage() {
   const [upload, setUpload] = useState<UploadResult | null>(null);
@@ -205,20 +208,26 @@ export default function OlsPage() {
               />
             </div>
 
-            {/* Equation */}
+            {/* Equation — LaTeX */}
             <div className="bg-layer border border-edge rounded-xl px-5 py-4">
-              <p className="text-xs text-secondary mb-2 font-mono tracking-wider uppercase">
+              <p className="text-xs text-secondary mb-3 font-mono tracking-wider uppercase">
                 Estimated equation
               </p>
-              <p className="font-mono text-sm text-prose leading-relaxed break-all">
-                {result.equation}
-              </p>
+              <OlsEquation latex={result.equation_latex} fallback={result.equation} />
               <div className="flex gap-4 mt-3 text-xs text-muted font-mono">
                 <span>AIC = {result.aic.toFixed(2)}</span>
                 <span>BIC = {result.bic.toFixed(2)}</span>
                 <span>R² = {result.r_squared.toFixed(4)}</span>
               </div>
             </div>
+
+            {/* Scatter chart */}
+            <OlsScatterChart
+              yActual={result.y_actual}
+              yFitted={result.y_fitted}
+              yCol={result.y_col}
+              influentialIdx={result.influential_obs.map((o) => o.index)}
+            />
 
             {/* Coefficients table */}
             <div>
@@ -401,6 +410,21 @@ function SectionLabel({ n, label, done }: { n: number; label: string; done: bool
       </span>
       <span className="text-xs font-medium text-secondary uppercase tracking-wider">{label}</span>
     </div>
+  );
+}
+
+function OlsEquation({ latex, fallback }: { latex: string; fallback: string }) {
+  let html = "";
+  try {
+    html = katex.renderToString(latex, { throwOnError: false, displayMode: true });
+  } catch {
+    html = `<code class="text-sm font-mono text-prose">${fallback}</code>`;
+  }
+  return (
+    <div
+      dangerouslySetInnerHTML={{ __html: html }}
+      className="overflow-x-auto text-prose py-1"
+    />
   );
 }
 

@@ -138,6 +138,9 @@ export interface OLSAnalysisResponse {
   y_type: "continuous" | "binary" | "count";
   model_type: "OLS" | "OLS_robust_HC3";
   equation: string;
+  equation_latex: string;
+  y_actual: number[];
+  y_fitted: number[];
   coefficients: OLSCoefficient[];
   insignificant_coefs: string[];
   r_squared: number;
