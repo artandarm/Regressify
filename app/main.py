@@ -6,6 +6,8 @@ import pandas as pd
 import numpy as np
 import io
 from app.core.engine import TSAnalysisPipeline
+from app.core.engine_ols import OLSPipeline
+from app.core.schemas import PipelineStep
 
 app = FastAPI(title="AllRegressions API", version="0.3.0")
 
@@ -39,13 +41,6 @@ def _np_clean(obj):
 
 
 # ── Pydantic response models ───────────────────────────────────────────────
-
-class PipelineStep(BaseModel):
-    name: str
-    message: str
-    verdict: Literal["ok", "warn", "error", "info"]
-    p_value: Optional[float] = None
-
 
 class OutlierPoint(BaseModel):
     index: int
@@ -336,4 +331,151 @@ async def analyze_ts(column: str):
         pre_analysis_steps=pre_steps,
         break_detection_steps=break_steps,
         segments=segments,
+    )
+
+
+# ── OLS Pydantic models ────────────────────────────────────────────────────
+
+class OLSCoefficient(BaseModel):
+    name: str
+    coef: float
+    std_err: float
+    t_stat: float
+    p_value: float
+    significant: bool
+    verdict: Literal["ok", "warn"]
+
+
+class VifEntry(BaseModel):
+    variable: str
+    vif: float
+    verdict: Literal["ok", "warn", "error"]
+    note: str
+
+
+class InfluentialObs(BaseModel):
+    index: int
+    cooks_d: float
+    leverage: float
+
+
+class RemovedVar(BaseModel):
+    variable: str
+    pvalue: float
+    bic_before: float
+    bic_after: float
+
+
+class OLSAnalysisResponse(BaseModel):
+    pipeline_type: Literal["ols"]
+    y_col: str
+    x_cols: list[str]
+    x_cols_original: list[str]
+    n_obs: int
+    y_type: Literal["continuous", "binary", "count"]
+    model_type: Literal["OLS", "OLS_robust_HC3"]
+    equation: str
+    coefficients: list[OLSCoefficient]
+    insignificant_coefs: list[str]
+    r_squared: float
+    adj_r_squared: float
+    f_statistic: float
+    f_pvalue: float
+    aic: float
+    bic: float
+    condition_number: float
+    vif_table: list[VifEntry]
+    influential_obs: list[InfluentialObs]
+    removed_vars: list[RemovedVar]
+    pre_analysis_steps: list[PipelineStep]
+    multicollinearity_steps: list[PipelineStep]
+    model_estimation_steps: list[PipelineStep]
+    variable_selection_steps: list[PipelineStep]
+    diagnostics_steps: list[PipelineStep]
+
+
+def _restructure_ols_log(raw_log: list) -> dict:
+    """Split flat OLS log by phase into section buckets."""
+    phases = {
+        "pre_analysis": [],
+        "multicollinearity": [],
+        "model_estimation": [],
+        "variable_selection": [],
+        "diagnostics": [],
+    }
+    for entry in raw_log:
+        phase = entry.get("phase", "pre_analysis")
+        step = _to_step(entry)
+        if phase in phases:
+            phases[phase].append(step)
+        else:
+            phases["pre_analysis"].append(step)
+    return phases
+
+
+# ── OLS route ──────────────────────────────────────────────────────────────
+
+class OLSRequest(BaseModel):
+    y_col: str
+    x_cols: list[str]
+
+
+@app.post("/analyze/ols", response_model=OLSAnalysisResponse)
+async def analyze_ols(req: OLSRequest):
+    if "data" not in _uploaded_df:
+        raise HTTPException(status_code=400, detail="Upload a file first via /upload")
+
+    df = _uploaded_df["data"]
+
+    missing = [c for c in [req.y_col] + req.x_cols if c not in df.columns]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Columns not found: {missing}")
+
+    try:
+        pipeline = OLSPipeline(df, req.y_col, req.x_cols)
+        raw = _np_clean(pipeline.run())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analysis error: {str(e)}")
+
+    phases = _restructure_ols_log(raw.get("log", []))
+
+    coefficients = [
+        OLSCoefficient(
+            name=name,
+            coef=info["coef"],
+            std_err=info["std_err"],
+            t_stat=info["t_stat"],
+            p_value=info["pvalue"],
+            significant=info["significant"],
+            verdict=info["verdict"],
+        )
+        for name, info in raw.get("coefficients", {}).items()
+    ]
+
+    return OLSAnalysisResponse(
+        pipeline_type="ols",
+        y_col=raw["y_col"],
+        x_cols=raw["x_cols"],
+        x_cols_original=raw["x_cols_original"],
+        n_obs=raw["n_obs"],
+        y_type=raw["y_type"],
+        model_type=raw["model_type"],
+        equation=raw["equation"],
+        coefficients=coefficients,
+        insignificant_coefs=raw.get("insignificant_coefs", []),
+        r_squared=raw["r_squared"],
+        adj_r_squared=raw["adj_r_squared"],
+        f_statistic=raw["f_statistic"],
+        f_pvalue=raw["f_pvalue"],
+        aic=raw["aic"],
+        bic=raw["bic"],
+        condition_number=raw["condition_number"],
+        vif_table=[VifEntry(**v) for v in raw.get("vif_table", [])],
+        influential_obs=[InfluentialObs(**o) for o in raw.get("influential_obs", [])],
+        removed_vars=[RemovedVar(**v) for v in raw.get("removed_vars", [])],
+        pre_analysis_steps=phases["pre_analysis"],
+        multicollinearity_steps=phases["multicollinearity"],
+        model_estimation_steps=phases["model_estimation"],
+        variable_selection_steps=phases["variable_selection"],
+        diagnostics_steps=phases["diagnostics"],
     )
