@@ -96,3 +96,63 @@ export interface UploadResult {
   columns: string[];
   preview: Record<string, unknown>[];
 }
+
+// ── OLS types ──────────────────────────────────────────────
+
+export interface OLSCoefficient {
+  name: string;
+  coef: number;
+  std_err: number;
+  t_stat: number;
+  p_value: number;
+  significant: boolean;
+  verdict: "ok" | "warn";
+}
+
+export interface VifEntry {
+  variable: string;
+  vif: number;
+  verdict: "ok" | "warn" | "error";
+  note: string;
+}
+
+export interface InfluentialObs {
+  index: number;
+  cooks_d: number;
+  leverage: number;
+}
+
+export interface RemovedVar {
+  variable: string;
+  pvalue: number;
+  bic_before: number;
+  bic_after: number;
+}
+
+export interface OLSAnalysisResponse {
+  pipeline_type: "ols";
+  y_col: string;
+  x_cols: string[];
+  x_cols_original: string[];
+  n_obs: number;
+  y_type: "continuous" | "binary" | "count";
+  model_type: "OLS" | "OLS_robust_HC3";
+  equation: string;
+  coefficients: OLSCoefficient[];
+  insignificant_coefs: string[];
+  r_squared: number;
+  adj_r_squared: number;
+  f_statistic: number;
+  f_pvalue: number;
+  aic: number;
+  bic: number;
+  condition_number: number;
+  vif_table: VifEntry[];
+  influential_obs: InfluentialObs[];
+  removed_vars: RemovedVar[];
+  pre_analysis_steps: PipelineStep[];
+  multicollinearity_steps: PipelineStep[];
+  model_estimation_steps: PipelineStep[];
+  variable_selection_steps: PipelineStep[];
+  diagnostics_steps: PipelineStep[];
+}

@@ -14,10 +14,10 @@ const MODES = [
     available: false,
   },
   {
-    href: "#",
+    href: "/ols",
     label: "Cross-section",
     description: "OLS, robust SE, variable selection, outlier diagnostics",
-    available: false,
+    available: true,
   },
 ];
 
