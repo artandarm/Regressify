@@ -323,6 +323,43 @@ class OLSPipeline(BasePipeline):
 
         return coef_report, insignificant
 
+    def add_beta_std(self, coef_report: dict, X: pd.DataFrame, y: pd.Series) -> None:
+        """
+        beta_std_i = coef_i * std(X_i) / std(Y).
+        Enriches coef_report in-place. Const gets beta_std=None.
+        """
+        std_y = float(y.std())
+        if std_y < 1e-12:
+            for info in coef_report.values():
+                info["beta_std"] = None
+            return
+
+        parts = []
+        for name, info in coef_report.items():
+            if name == "const":
+                info["beta_std"] = None
+                continue
+            if name not in X.columns:
+                info["beta_std"] = None
+                continue
+            std_x = float(X[name].std())
+            if std_x < 1e-12:
+                info["beta_std"] = None
+                continue
+            b = round(float(info["coef"]) * std_x / std_y, 4)
+            info["beta_std"] = b
+            parts.append(f"{name}: β*={b}")
+
+        if parts:
+            self._log(
+                step="Standardized coefficients",
+                decision=(
+                    ", ".join(parts) +
+                    " (relative importance of regressors regardless of units)"
+                ),
+                verdict="info",
+            )
+
     def build_ols_equation(self, model, y_col: str, x_cols: list) -> str:
         """Строит читаемое уравнение Y = a + b1*X1 + b2*X2 ..."""
         const = round(float(model.params.get("const", 0)), 4)
@@ -431,6 +468,105 @@ class OLSPipeline(BasePipeline):
                 break
 
         return X[remaining], removed
+
+    def chow_test(self, y: pd.Series, X_final: pd.DataFrame) -> list:
+        """
+        Chow test for structural stability across groups of low-cardinality
+        integer-like regressors (≤ 10 unique values).
+        Grouping variable is excluded from the per-group regressions.
+        F = ((RSS_pooled - sum_RSS_i) / ((g-1)*k)) / (sum_RSS_i / (n - g*k))
+        """
+        from scipy.stats import f as f_dist
+
+        results = []
+        n = len(y)
+
+        candidates = [
+            col for col in X_final.columns
+            if X_final[col].nunique() >= 2
+            and X_final[col].nunique() <= 10
+            and (X_final[col].dropna() % 1 == 0).all()
+        ]
+
+        if not candidates:
+            self._log(
+                step="Chow test",
+                decision="No binary/low-cardinality integer regressors — Chow test skipped",
+                verdict="info",
+            )
+            return results
+
+        for col in candidates:
+            X_other = X_final.drop(columns=[col])
+            if X_other.shape[1] == 0:
+                continue
+
+            groups = sorted(X_final[col].unique())
+            g = len(groups)
+            k = X_other.shape[1] + 1  # regressors + intercept
+            df1 = (g - 1) * k
+            df2 = n - g * k
+
+            if df2 <= 0:
+                self._log(
+                    step=f"Chow test: {col}",
+                    decision=f"Skipped — insufficient df (n={n}, g={g}, k={k})",
+                    verdict="info",
+                )
+                continue
+
+            # Pooled RSS
+            Xc = add_constant(X_other, has_constant="add")
+            rss_pooled = float(OLS(y, Xc).fit().ssr)
+
+            # Per-group RSS
+            rss_groups = 0.0
+            valid = True
+            for grp in groups:
+                mask = X_final[col] == grp
+                y_g = y[mask]
+                X_g = X_other[mask]
+                if len(y_g) <= k:
+                    valid = False
+                    break
+                Xc_g = add_constant(X_g, has_constant="add")
+                rss_groups += float(OLS(y_g, Xc_g).fit().ssr)
+
+            if not valid:
+                self._log(
+                    step=f"Chow test: {col}",
+                    decision=f"Skipped — a group has ≤ {k} observations",
+                    verdict="info",
+                )
+                continue
+
+            f_stat = ((rss_pooled - rss_groups) / df1) / (rss_groups / df2)
+            pvalue = float(f_dist.sf(f_stat, df1, df2))
+            reject = pvalue < 0.05
+
+            verdict = "warn" if reject else "ok"
+            message = (
+                f"Coefficients differ significantly across groups of '{col}' — "
+                "consider interaction terms or separate models"
+                if reject else
+                f"Model structure is stable across groups of '{col}'"
+            )
+
+            self._log(
+                step=f"Chow test: {col}",
+                decision=f"F({df1}, {df2}) = {f_stat:.3f}, p = {pvalue:.4f} — {message}",
+                verdict=verdict,
+            )
+
+            results.append({
+                "variable": col,
+                "f_stat": round(f_stat, 4),
+                "pvalue": round(pvalue, 4),
+                "verdict": verdict,
+                "message": message,
+            })
+
+        return results
 
     # ══════════════════════════════════════════
     # БЛОК Д: диагностика остатков
@@ -702,6 +838,8 @@ class OLSPipeline(BasePipeline):
                 verdict="ok",
             )
 
+        chow_results = self.chow_test(y, X_final)
+
         # ── Блок Д: диагностика ───────────────────────────────────
         self._current_phase = "diagnostics"
 
@@ -730,6 +868,22 @@ class OLSPipeline(BasePipeline):
 
         self.test_linearity_reset(final_model, y, X_final, suggest_log_y)
         self.test_autocorrelation(resid, X_final)
+
+        # Стандартизированные беты — после всех возможных пересчётов модели
+        self._current_phase = "model_estimation"
+        self.add_beta_std(coef_report, X_final, y)
+
+        # Observations array: obs_index = original pandas index before listwise deletion
+        influential_set = {obs["index"] for obs in influential_obs}
+        observations = [
+            {
+                "obs_index": int(orig_idx),
+                "fitted": round(float(final_model.fittedvalues.iloc[pos]), 6),
+                "residual": round(float(final_model.resid.iloc[pos]), 6),
+                "influential": pos in influential_set,
+            }
+            for pos, orig_idx in enumerate(y.index)
+        ]
 
         # ── Результат ─────────────────────────────────────────────
         equation_latex = self.build_ols_equation_latex(
@@ -760,6 +914,8 @@ class OLSPipeline(BasePipeline):
             "aic": model_stats["aic"],
             "bic": model_stats["bic"],
             "removed_vars": removed_vars,
+            "chow_tests": chow_results,
+            "observations": observations,
             "log": self.log,
         }
 

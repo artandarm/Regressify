@@ -348,6 +348,7 @@ async def analyze_ts(column: str):
 class OLSCoefficient(BaseModel):
     name: str
     coef: float
+    beta_std: Optional[float] = None
     std_err: float
     t_stat: float
     p_value: float
@@ -375,6 +376,21 @@ class RemovedVar(BaseModel):
     bic_after: float
 
 
+class Observation(BaseModel):
+    obs_index: int
+    fitted: float
+    residual: float
+    influential: bool
+
+
+class ChowTest(BaseModel):
+    variable: str
+    f_stat: float
+    pvalue: float
+    verdict: Literal["ok", "warn"]
+    message: str
+
+
 class OLSAnalysisResponse(BaseModel):
     pipeline_type: Literal["ols"]
     y_col: str
@@ -399,6 +415,8 @@ class OLSAnalysisResponse(BaseModel):
     vif_table: list[VifEntry]
     influential_obs: list[InfluentialObs]
     removed_vars: list[RemovedVar]
+    chow_tests: list[ChowTest]
+    observations: list[Observation]
     pre_analysis_steps: list[PipelineStep]
     multicollinearity_steps: list[PipelineStep]
     model_estimation_steps: list[PipelineStep]
@@ -472,6 +490,7 @@ async def analyze_ols(req: OLSRequest):
         OLSCoefficient(
             name=name,
             coef=info["coef"],
+            beta_std=info.get("beta_std"),
             std_err=info["std_err"],
             t_stat=info["t_stat"],
             p_value=info["pvalue"],
@@ -505,6 +524,8 @@ async def analyze_ols(req: OLSRequest):
         vif_table=[VifEntry(**v) for v in raw.get("vif_table", [])],
         influential_obs=[InfluentialObs(**o) for o in raw.get("influential_obs", [])],
         removed_vars=[RemovedVar(**v) for v in raw.get("removed_vars", [])],
+        chow_tests=[ChowTest(**ct) for ct in raw.get("chow_tests", [])],
+        observations=[Observation(**o) for o in raw.get("observations", [])],
         pre_analysis_steps=phases["pre_analysis"],
         multicollinearity_steps=phases["multicollinearity"],
         model_estimation_steps=phases["model_estimation"],

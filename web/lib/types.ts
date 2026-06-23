@@ -103,6 +103,7 @@ export interface UploadResult {
 export interface OLSCoefficient {
   name: string;
   coef: number;
+  beta_std: number | null;
   std_err: number;
   t_stat: number;
   p_value: number;
@@ -130,6 +131,21 @@ export interface RemovedVar {
   bic_after: number;
 }
 
+export interface Observation {
+  obs_index: number;
+  fitted: number;
+  residual: number;
+  influential: boolean;
+}
+
+export interface ChowTest {
+  variable: string;
+  f_stat: number;
+  pvalue: number;
+  verdict: "ok" | "warn";
+  message: string;
+}
+
 export interface OLSAnalysisResponse {
   pipeline_type: "ols";
   y_col: string;
@@ -154,6 +170,8 @@ export interface OLSAnalysisResponse {
   vif_table: VifEntry[];
   influential_obs: InfluentialObs[];
   removed_vars: RemovedVar[];
+  chow_tests: ChowTest[];
+  observations: Observation[];
   pre_analysis_steps: PipelineStep[];
   multicollinearity_steps: PipelineStep[];
   model_estimation_steps: PipelineStep[];
