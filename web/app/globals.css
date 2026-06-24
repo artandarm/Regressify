@@ -1,33 +1,48 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Fonts */
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-plex-mono);
 
-  /* Surface scale */
-  --color-base:   #0d0d12;
-  --color-layer:  #16161f;
-  --color-raised: #1c1c28;
-  --color-edge:   #2a2a3a;
+  /* Surfaces — light theme */
+  --color-base:    #ffffff;
+  --color-layer:   #f8f9fb;
+  --color-raised:  #f1f3f7;
+  --color-edge:    #e2e6ef;
 
-  /* Text scale */
-  --color-muted:     #44445a;
-  --color-secondary: #7878a0;
-  --color-prose:     #e0e0f0;
+  /* Text */
+  --color-prose:     #1a2030;
+  --color-secondary: #5a6478;
+  --color-muted:     #9ba3af;
 
-  /* Semantic */
-  --color-accent: #818cf8;
-  --color-ok:     #34d399;
-  --color-warn:   #fbbf24;
-  --color-bad:    #f87171;
+  /* Accent — deep academic blue */
+  --color-accent:    #1a4480;
+  --color-accent-bg: #eff4fc;
+
+  /* Verdict — dark variants for legibility on white */
+  --color-ok:        #15803d;
+  --color-ok-bg:     #f0fdf4;
+  --color-warn:      #b45309;
+  --color-warn-bg:   #fffbeb;
+  --color-bad:       #b91c1c;
+  --color-bad-bg:    #fef2f2;
+  --color-info:      #1a4480;
+  --color-info-bg:   #eff4fc;
 }
 
 html, body {
   background: var(--color-base);
   color: var(--color-prose);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-family: var(--font-inter), system-ui, sans-serif;
   min-height: 100%;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* KaTeX */
-.katex-display { overflow-x: auto; }
+/* KaTeX display equations — remove default margin */
+.katex-display {
+  margin: 0 !important;
+  overflow-x: auto;
+}

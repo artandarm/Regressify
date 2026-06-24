@@ -420,9 +420,11 @@ class TSAnalysisPipeline(BasePipeline):
                 continue
             sig = pval < 0.05
             coef_report[name] = {
-                "coef": round(float(model.params[name]), 4),
-                "pvalue": round(float(pval), 4),
-                "significant": sig
+                "coef":     round(float(model.params[name]), 4),
+                "std_err":  round(float(model.bse[name]), 4),
+                "t_stat":   round(float(model.tvalues[name]), 4),
+                "pvalue":   round(float(pval), 4),
+                "significant": sig,
             }
             if not sig:
                 insignificant.append(name)

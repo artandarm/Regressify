@@ -52,6 +52,8 @@ class OutlierPoint(BaseModel):
 class Coefficient(BaseModel):
     name: str
     value: float
+    std_err: Optional[float] = None
+    t_stat: Optional[float] = None
     p_value: float
     significant: bool
 
@@ -184,6 +186,8 @@ def _build_segment(seg: dict, steps: list) -> SegmentResult:
         Coefficient(
             name=name,
             value=info["coef"],
+            std_err=info.get("std_err"),
+            t_stat=info.get("t_stat"),
             p_value=info["pvalue"],
             significant=info["significant"],
         )

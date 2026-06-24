@@ -14,6 +14,8 @@ export interface OutlierPoint {
 export interface Coefficient {
   name: string;
   value: number;
+  std_err: number | null;
+  t_stat: number | null;
   p_value: number;
   significant: boolean;
 }
