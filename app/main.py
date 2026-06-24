@@ -7,6 +7,7 @@ import numpy as np
 import io
 from app.core.engine import TSAnalysisPipeline
 from app.core.engine_ols import OLSPipeline
+from app.core.engine_panel import PanelPipeline
 from app.core.schemas import PipelineStep
 
 app = FastAPI(title="AllRegressions API", version="0.3.0")
@@ -288,7 +289,10 @@ async def upload_file(file: UploadFile = File(...)):
         "rows": len(df),
         "total_rows": total_rows,
         "columns": list(df.columns),
-        "preview": df.head(5).to_dict(orient="records"),
+        "preview": [
+            {k: (None if (isinstance(v, float) and np.isnan(v)) else v) for k, v in row.items()}
+            for row in df.head(5).to_dict(orient="records")
+        ],
     }
 
 
@@ -532,3 +536,38 @@ async def analyze_ols(req: OLSRequest):
         variable_selection_steps=phases["variable_selection"],
         diagnostics_steps=phases["diagnostics"],
     )
+
+
+# ── Panel routes ───────────────────────────────────────────────────────────
+
+class PanelRequest(BaseModel):
+    entity_col: str
+    time_col: str
+    dep_var: str
+    regressors: list[str]
+
+
+@app.post("/analyze/panel")
+async def analyze_panel(req: PanelRequest):
+    if "data" not in _uploaded_df:
+        raise HTTPException(status_code=400, detail="Upload a file first via /upload")
+
+    df = _uploaded_df["data"]
+
+    missing_cols = [
+        c for c in [req.entity_col, req.time_col, req.dep_var] + req.regressors
+        if c not in df.columns
+    ]
+    if missing_cols:
+        raise HTTPException(status_code=400, detail=f"Columns not found: {missing_cols}")
+
+    try:
+        pipeline = PanelPipeline(df, req.entity_col, req.time_col, req.dep_var, req.regressors)
+        result = _np_clean(pipeline.run())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Panel diagnostics error: {str(e)}")
+
+    if result["hard_stops"]:
+        raise HTTPException(status_code=422, detail=result)
+
+    return result
