@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from scipy.stats import f as f_dist
+from scipy.stats import f as f_dist, t as t_dist, norm
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
 import warnings
@@ -496,6 +496,7 @@ class PanelPipeline(BasePipeline):
         # ── Block 4: TWFE if FE recommended & T > 1 ─
         self._current_phase = "twfe_estimation"
         twfe_f_test = None
+        twfe_res = None
 
         if recommended == "FE" and T_unique > 1 and fe_res is not None:
             try:
@@ -556,9 +557,19 @@ class PanelPipeline(BasePipeline):
                 }
                 self._log(step="TWFE", decision=f"Failed: {e}", verdict="error")
 
-        # ── Final model ────────────────────────────
+        # ── Final model + diagnostics ──────────────
         final_key = recommendation["recommended_model"].lower()
         final_model_dict = models_dict.get(final_key) or models_dict.get("fe")
+
+        # Map key -> actual linearmodels result for residual diagnostics
+        _res_map = {"pols": pols_res, "fe": fe_res, "re": re_res, "twfe": twfe_res}
+        final_res_obj = _res_map.get(final_key) or fe_res
+
+        self._current_phase = "diagnostics"
+        diagnostics, final_model_dict = self.diagnose_residuals(
+            final_res_obj, final_model_dict, Y, X, X_c,
+            recommendation["recommended_model"], T_unique, N,
+        )
 
         return {
             "panel_structure": diag["panel_structure"],
@@ -573,8 +584,209 @@ class PanelPipeline(BasePipeline):
                 "twfe_f_test": twfe_f_test,
             },
             "recommendation": recommendation,
+            "diagnostics": diagnostics,
             "final_model": final_model_dict,
         }
+
+    # ══════════════════════════════════════════
+    # DIAGNOSE RESIDUALS
+    # ══════════════════════════════════════════
+
+    def diagnose_residuals(self, final_res, final_model_dict: dict,
+                           Y, X, X_c, recommended: str,
+                           T_unique: int, N: int) -> tuple:
+        """
+        Test 1: Wooldridge AR(1) — always.
+        Test 2: Pesaran CD       — only if T >= 10.
+        Test 3: SE adjustment    — switch to Driscoll-Kraay if CD significant.
+        Returns (diagnostics dict, updated final_model_dict).
+        """
+        steps = []
+        se_type_final = "clustered"
+
+        if final_res is None:
+            return {"steps": steps, "se_type_final": se_type_final}, final_model_dict
+
+        # ── Extract residuals ──────────────────
+        try:
+            resids = final_res.resids
+            entity_vals = resids.index.get_level_values(0)
+            time_vals   = resids.index.get_level_values(1)
+            resid_df = pd.DataFrame({
+                "entity": entity_vals,
+                "time":   time_vals,
+                "resid":  resids.values,
+            }).sort_values(["entity", "time"]).reset_index(drop=True)
+        except Exception as e:
+            return {
+                "steps": [{"name": "residual extraction", "verdict": "error", "message": str(e)}],
+                "se_type_final": se_type_final,
+            }, final_model_dict
+
+        # ── Test 1: Wooldridge AR(1) ───────────
+        # Use first-differenced residuals: r_it = e_it - e_i,t-1
+        # Regress r_it on r_i,t-1; H0: coef = -0.5 (Wooldridge 2002 / Drukker 2003)
+        # This is calibrated: under iid errors E[coef] = -Var(e) / 2Var(e) = -0.5
+        wt_reject = False
+        try:
+            resid_df["resid_fd"]     = resid_df.groupby("entity")["resid"].diff()
+            resid_df["resid_fd_lag"] = resid_df.groupby("entity")["resid_fd"].shift(1)
+            wt_df = resid_df.dropna(subset=["resid_fd", "resid_fd_lag"])
+
+            X_wt = add_constant(wt_df[["resid_fd_lag"]].values, has_constant="add")
+            y_wt = wt_df["resid_fd"].values
+            entity_wt = wt_df["entity"].values
+
+            wt_model = OLS(y_wt, X_wt).fit(
+                cov_type="cluster", cov_kwds={"groups": entity_wt}
+            )
+
+            coef_lag = float(wt_model.params[1])
+            se_lag   = float(wt_model.bse[1])
+            t_wt     = (coef_lag - (-0.5)) / se_lag
+            p_wt     = float(2 * t_dist.sf(abs(t_wt), float(wt_model.df_resid)))
+            wt_reject = p_wt < 0.05
+
+            steps.append({
+                "name": "Wooldridge test (AR(1) in residuals)",
+                "statistic": _sf(t_wt),
+                "pvalue": _sf(p_wt),
+                "verdict": "warn" if wt_reject else "ok",
+                "message": (
+                    "Serial correlation detected -> consider adding lagged Y or "
+                    "AR(1)-corrected SE (Driscoll-Kraay covers this if CD also detected)"
+                    if wt_reject
+                    else "No serial correlation detected in residuals"
+                ),
+            })
+            self._log(
+                step="Wooldridge AR(1) test",
+                decision=f"t={t_wt:.3f} p={p_wt:.4f} (H0: coef(e_lag)=-0.5)",
+                verdict="warn" if wt_reject else "ok",
+            )
+        except Exception as e:
+            steps.append({
+                "name": "Wooldridge test (AR(1) in residuals)",
+                "verdict": "error", "message": str(e),
+            })
+
+        # ── Test 2: Pesaran CD ─────────────────
+        cd_reject = False
+        if T_unique < 10:
+            steps.append({
+                "name": "Pesaran CD test (cross-sectional dependence)",
+                "statistic": None,
+                "pvalue": None,
+                "verdict": "info",
+                "message": f"CD test skipped: requires T >= 10 (current T = {T_unique})",
+            })
+        else:
+            try:
+                resids_by_entity = {}
+                for entity, grp in resid_df.groupby("entity"):
+                    resids_by_entity[entity] = grp.set_index("time")["resid"]
+
+                entities_list = list(resids_by_entity.keys())
+                N_ent = len(entities_list)
+                cd_sum = 0.0
+                pair_count = 0
+
+                for ii in range(N_ent):
+                    for jj in range(ii + 1, N_ent):
+                        e_i = resids_by_entity[entities_list[ii]]
+                        e_j = resids_by_entity[entities_list[jj]]
+                        common = e_i.index.intersection(e_j.index)
+                        T_ij = len(common)
+                        if T_ij < 2:
+                            continue
+                        rho = float(np.corrcoef(e_i[common].values, e_j[common].values)[0, 1])
+                        if np.isnan(rho):
+                            continue
+                        cd_sum += np.sqrt(T_ij) * rho
+                        pair_count += 1
+
+                if pair_count > 0:
+                    cd_stat = np.sqrt(2.0 / (N_ent * (N_ent - 1))) * cd_sum
+                    p_cd    = float(2 * norm.sf(abs(cd_stat)))
+                else:
+                    cd_stat, p_cd = 0.0, 1.0
+
+                cd_reject = p_cd < 0.05
+                steps.append({
+                    "name": "Pesaran CD test (cross-sectional dependence)",
+                    "statistic": _sf(cd_stat),
+                    "pvalue": _sf(p_cd),
+                    "verdict": "warn" if cd_reject else "ok",
+                    "message": (
+                        "Cross-sectional dependence detected -> switching to Driscoll-Kraay SE"
+                        if cd_reject
+                        else "No cross-sectional dependence detected"
+                    ),
+                })
+                self._log(
+                    step="Pesaran CD test",
+                    decision=f"CD={cd_stat:.3f} p={p_cd:.4f}",
+                    verdict="warn" if cd_reject else "ok",
+                )
+            except Exception as e:
+                steps.append({
+                    "name": "Pesaran CD test (cross-sectional dependence)",
+                    "verdict": "error", "message": str(e),
+                })
+
+        # ── Test 3: SE adjustment ──────────────
+        if cd_reject:
+            try:
+                rec = recommended.upper()
+                if rec == "POLS":
+                    dk_res = PooledOLS(Y, X_c).fit(cov_type="kernel")
+                elif rec == "RE":
+                    dk_res = RandomEffects(Y, X_c).fit(cov_type="kernel")
+                elif rec == "TWFE":
+                    dk_res = PanelOLS(Y, X, entity_effects=True, time_effects=True).fit(
+                        cov_type="kernel"
+                    )
+                else:
+                    dk_res = PanelOLS(Y, X, entity_effects=True).fit(cov_type="kernel")
+
+                updated_coefs = []
+                for c in final_model_dict.get("coefficients", []):
+                    name = c["name"]
+                    if name in dk_res.params.index:
+                        pval = _sf(float(dk_res.pvalues[name]))
+                        updated_coefs.append({
+                            **c,
+                            "std_err": _sf(float(dk_res.std_errors[name])),
+                            "t_stat":  _sf(float(dk_res.tstats[name])),
+                            "pvalue":  pval,
+                            "verdict": "ok" if (pval is not None and pval < 0.05) else "warn",
+                        })
+                    else:
+                        updated_coefs.append(c)
+
+                final_model_dict = {**final_model_dict, "coefficients": updated_coefs}
+                se_type_final = "driscoll_kraay"
+
+                steps.append({
+                    "name": "SE adjustment",
+                    "verdict": "info",
+                    "message": (
+                        "Driscoll-Kraay SE applied due to cross-sectional dependence. "
+                        "Coefficients unchanged, standard errors updated."
+                    ),
+                })
+                self._log(
+                    step="SE adjustment (Driscoll-Kraay)",
+                    decision="cov_type='kernel' applied to final model",
+                    verdict="info",
+                )
+            except Exception as e:
+                steps.append({
+                    "name": "SE adjustment",
+                    "verdict": "error", "message": f"DK SE failed: {e}",
+                })
+
+        return {"steps": steps, "se_type_final": se_type_final}, final_model_dict
 
     # ══════════════════════════════════════════
     # RUN
