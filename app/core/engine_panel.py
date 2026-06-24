@@ -571,21 +571,165 @@ class PanelPipeline(BasePipeline):
             recommendation["recommended_model"], T_unique, N,
         )
 
+        # ── Additions 1-3 ─────────────────────────
+        final_model_dict = self._add_beta_std(
+            final_model_dict, Y, X, X_c, recommendation["recommended_model"]
+        )
+        observations      = self._build_observations(final_res_obj, Y)
+        model_comparison  = self._build_model_comparison(
+            models_dict, recommendation, diagnostics
+        )
+
+        all_disclaimers = diag.get("disclaimers", []) + [{
+            "verdict": "info",
+            "message": (
+                "Influential observations flagged by |residual| > 2.5*sigma. "
+                "Panel-specific influence measures (Cook's D equivalent) not implemented."
+            ),
+        }]
+
         return {
-            "panel_structure": diag["panel_structure"],
-            "hard_stops": [],
-            "warnings": diag.get("warnings", []),
-            "disclaimers": diag.get("disclaimers", []),
-            "models": models_dict,
+            "panel_structure":  diag["panel_structure"],
+            "hard_stops":       [],
+            "warnings":         diag.get("warnings", []),
+            "disclaimers":      all_disclaimers,
+            "models":           models_dict,
             "selection_tests": {
                 "f_test_pols_fe": f_test_result,
-                "hausman": hausman_result,
-                "mundlak": mundlak_result,
-                "twfe_f_test": twfe_f_test,
+                "hausman":        hausman_result,
+                "mundlak":        mundlak_result,
+                "twfe_f_test":    twfe_f_test,
             },
-            "recommendation": recommendation,
-            "diagnostics": diagnostics,
-            "final_model": final_model_dict,
+            "recommendation":   recommendation,
+            "diagnostics":      diagnostics,
+            "model_comparison": model_comparison,
+            "observations":     observations,
+            "final_model":      final_model_dict,
+        }
+
+    # ══════════════════════════════════════════
+    # BETA STD / OBSERVATIONS / COMPARISON
+    # ══════════════════════════════════════════
+
+    def _add_beta_std(self, final_model_dict: dict, Y, X, X_c,
+                      recommended: str) -> dict:
+        """
+        beta_std_i = coef_i * std(X_i) / std(Y).
+        FE/TWFE: within-transformed std (entity-demeaned).
+        POLS/RE: raw std.
+        Skips const and any term not in X.
+        """
+        rec = recommended.upper()
+        use_within = rec in ("FE", "TWFE")
+
+        if use_within:
+            Y_w = Y - Y.groupby(level=0).transform("mean")
+            X_w = X.subtract(X.groupby(level=0).transform("mean"))
+            std_y = float(Y_w.std())
+            std_x = {col: float(X_w[col].std()) for col in X.columns}
+        else:
+            std_y = float(Y.std())
+            std_x = {col: float(X[col].std()) for col in X.columns}
+
+        updated = []
+        for c in final_model_dict.get("coefficients", []):
+            name = c["name"]
+            coef = c.get("coef")
+            if (coef is not None and name in std_x
+                    and std_y > 1e-12 and std_x[name] > 1e-12):
+                beta_std = _sf(float(coef) * std_x[name] / std_y, 4)
+            else:
+                beta_std = None
+            updated.append({**c, "beta_std": beta_std})
+
+        return {**final_model_dict, "coefficients": updated}
+
+    def _build_observations(self, final_res_obj, Y) -> list:
+        """
+        y_actual, y_fitted (= y - resid), residual, influential flag.
+        influential = |residual| > 2.5 * std(residuals).
+        """
+        if final_res_obj is None:
+            return []
+        try:
+            resids = final_res_obj.resids
+            std_r = float(resids.std())
+            threshold = 2.5 * std_r
+
+            obs = []
+            for idx in resids.index:
+                entity_val, time_val = idx
+                resid_val = float(resids.loc[idx])
+                y_act = float(Y.loc[idx])
+                obs.append({
+                    "entity": entity_val,
+                    "time": (int(time_val)
+                             if isinstance(time_val, (int, np.integer))
+                             else str(time_val)),
+                    "y_actual":  _sf(y_act, 4),
+                    "y_fitted":  _sf(y_act - resid_val, 4),
+                    "residual":  _sf(resid_val, 4),
+                    "influential": bool(abs(resid_val) > threshold),
+                })
+            return obs
+        except Exception:
+            return []
+
+    def _build_model_comparison(self, models_dict: dict, recommendation: dict,
+                                diagnostics: dict) -> dict:
+        """
+        Cross-table: models (columns) × coefficients/fit (rows).
+        Only the final model may carry DK SE; others stay clustered.
+        """
+        model_keys  = ["pols", "fe", "re", "twfe"]
+        active_keys = [k for k in model_keys if models_dict.get(k) is not None]
+        final_key   = recommendation["recommended_model"].lower()
+        se_final    = diagnostics.get("se_type_final", "clustered")
+
+        se_types = {k: (se_final if k == final_key else "clustered")
+                    for k in active_keys}
+
+        # Union of coefficient names in first-seen order
+        seen: list[str] = []
+        for k in active_keys:
+            for c in models_dict[k].get("coefficients", []):
+                if c["name"] not in seen:
+                    seen.append(c["name"])
+
+        coef_table: dict = {}
+        for name in seen:
+            coef_table[name] = {}
+            for k in active_keys:
+                by_name = {c["name"]: c for c in models_dict[k].get("coefficients", [])}
+                if name in by_name:
+                    c = by_name[name]
+                    coef_table[name][k.upper()] = {
+                        "coef":    c.get("coef"),
+                        "pvalue":  c.get("pvalue"),
+                        "verdict": c.get("verdict"),
+                    }
+
+        fit_table: dict = {}
+        for k in active_keys:
+            m = models_dict[k]
+            mtype = m.get("model_type", k.upper())
+            if mtype in ("FE", "TWFE"):
+                fit_table[k.upper()] = {
+                    "r_squared_within": m.get("r_squared_within"),
+                    "aic": None,
+                }
+            else:
+                fit_table[k.upper()] = {
+                    "r_squared": m.get("r_squared"),
+                    "aic": None,
+                }
+
+        return {
+            "models":      [k.upper() for k in active_keys],
+            "se_type":     [se_types[k] for k in active_keys],
+            "coefficients": coef_table,
+            "fit":         fit_table,
+            "recommended": recommendation["recommended_model"],
         }
 
     # ══════════════════════════════════════════
