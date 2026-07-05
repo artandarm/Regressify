@@ -1,32 +1,32 @@
 # Regressify
 
-Automated econometric analysis for researchers and analysts who need rigorous statistical models without writing code. Upload a dataset, select variables — the pipeline runs the tests, selects the model, and explains every decision.
+Автоматизированный эконометрический анализ для исследователей и аналитиков, которым нужны строгие статистические модели без написания кода. Загрузите датасет, выберите переменные — пайплайн запустит тесты, подберёт модель и объяснит каждое принятое решение.
 
 ---
 
-## What it does
+## Что это и зачем
 
-Most econometric tools either require you to know which model to run upfront (Stata, R) or hide all the methodology behind a black box (AutoML). Regressify sits in between: it runs the full diagnostic workflow that a trained econometrician would run, exposes every test result and p-value, and gives you a model you can actually cite.
+Большинство эконометрических инструментов требуют либо заранее знать, какую модель запускать (Stata, R), либо скрывают всю методологию в чёрном ящике (AutoML). Regressify занимает промежуточное место: он воспроизводит полный диагностический процесс обученного эконометриста, показывает каждый тест и p-значение, и выдаёт модель, на которую можно сослаться в работе.
 
-**Three analysis modes:**
+**Три режима анализа:**
 
-| Mode | Use case |
+| Режим | Когда использовать |
 |---|---|
-| **Time Series** | Single variable observed over time — ARIMA/SARIMA, structural breaks, volatility |
-| **Cross-section OLS** | Observations at a single point in time — regression with automatic SE correction |
-| **Panel Data** | Multiple entities observed over multiple time periods — FE/RE/TWFE selection |
+| **Временные ряды** | Одна переменная, наблюдаемая во времени — ARIMA/SARIMA, структурные сдвиги, волатильность |
+| **Кросс-секционный OLS** | Наблюдения в один момент времени — регрессия с автоматической коррекцией стандартных ошибок |
+| **Панельные данные** | Множество объектов за несколько периодов — отбор между FE/RE/TWFE |
 
 ---
 
-## Tech stack
+## Технологии
 
 - **Backend:** Python · FastAPI · statsmodels · linearmodels · arch
 - **Frontend:** Next.js 16 · Tailwind CSS v4 · Recharts · KaTeX
-- **Fonts:** Inter + IBM Plex Mono
+- **Шрифты:** Inter + IBM Plex Mono
 
 ---
 
-## Running locally
+## Запуск локально
 
 ```bash
 # Backend (Python 3.11+)
@@ -39,237 +39,237 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Откройте `http://localhost:3000`.
 
 ---
 
-## Time Series
+## Временные ряды
 
-### What it does
+### Что делает
 
-Fits ARIMA/SARIMA models to a univariate time series. Detects structural breaks and fits separate models per segment. Detects volatility clustering and fits GARCH(1,1) if needed. Validates the final model out-of-sample.
+Подбирает ARIMA/SARIMA-модель для одномерного временного ряда. Обнаруживает структурные сдвиги и строит отдельные модели для каждого сегмента. Выявляет кластеризацию волатильности и подбирает GARCH(1,1) при необходимости. Валидирует итоговую модель на выборке вне обучения.
 
-### Logic tree
+### Дерево логики
 
 ```
-1. OUTLIER DETECTION
-   └─ IQR + residual-based detection → additive outliers interpolated
+1. ВЫБРОСЫ
+   └─ IQR + обнаружение по остаткам → аддитивные выбросы интерполируются
 
-2. SEASONALITY DETECTION
-   └─ ACF/PACF periodogram → seasonal period m (if found)
+2. СЕЗОННОСТЬ
+   └─ Периодограмма ACF/PACF → сезонный период m (если найден)
 
-3. STATIONARITY
-   ├─ ADF + PP + KPSS (majority vote)
-   ├─ Stationary → d = 0
-   └─ Non-stationary → difference → retest (max d = 2)
+3. СТАЦИОНАРНОСТЬ
+   ├─ ADF + PP + KPSS (голосование большинством)
+   ├─ Стационарен → d = 0
+   └─ Нестационарен → дифференцирование → повторный тест (макс. d = 2)
 
-4. STRUCTURAL BREAK DETECTION
-   ├─ CUSUM test → candidate breakpoints
-   ├─ Zivot-Andrews test → single break location
-   ├─ Chow test at each candidate → confirm/reject
-   └─ Colocation filter → merge breaks closer than min_segment_len
+4. СТРУКТУРНЫЕ СДВИГИ
+   ├─ Тест CUSUM → кандидаты на точки разлома
+   ├─ Тест Зивота-Эндрюса → одна точка разлома
+   ├─ Тест Чоу в каждой точке-кандидате → подтверждение/отклонение
+   └─ Фильтрация близких точек → слияние разломов ближе min_segment_len
 
-5. PER-SEGMENT MODEL FITTING
-   ├─ Grid search: ARIMA(p, d, q), p ≤ 4, q ≤ 4
-   ├─ Seasonal: SARIMA(p, d, q)(P, D, Q)[m] if m detected
-   ├─ Order selection: AIC (primary) + BIC (tiebreaker)
-   ├─ AIC/BIC conflict → model averaging (Akaike weights)
-   ├─ Coefficient significance → t-tests, drop if all insig.
-   ├─ Residual diagnostics:
-   │   ├─ Ljung-Box → serial correlation
-   │   └─ ARCH-LM → volatility clustering
-   ├─ ARCH detected → fit GARCH(1,1)
-   └─ Distribution: Normal vs Student-t (AIC comparison)
+5. ПОДБОР МОДЕЛИ ПО СЕГМЕНТАМ
+   ├─ Перебор: ARIMA(p, d, q), p ≤ 4, q ≤ 4
+   ├─ Сезонная: SARIMA(p, d, q)(P, D, Q)[m] при обнаруженном m
+   ├─ Выбор порядка: AIC (первично) + BIC (для разрешения конфликта)
+   ├─ Конфликт AIC/BIC → усреднение моделей (веса Акаике)
+   ├─ Значимость коэффициентов → t-тесты, модель пересчитывается при незначимости
+   ├─ Диагностика остатков:
+   │   ├─ Льюнг-Бокс → серийная корреляция
+   │   └─ ARCH-LM → кластеризация волатильности
+   ├─ ARCH обнаружен → подбор GARCH(1,1)
+   └─ Распределение: нормальное vs. Стьюдента (сравнение по AIC)
 
-6. MULTI-SEGMENT VALIDATION
-   └─ Walk-forward OOS: segmented vs unified model → RMSE comparison
+6. ВАЛИДАЦИЯ (НЕСКОЛЬКО СЕГМЕНТОВ)
+   └─ Walk-forward OOS: сегментированная vs единая модель → сравнение RMSE
 ```
 
-### Data requirements & constraints
+### Требования к данным и ограничения
 
-**Works best with:**
-- 100 – 2 000 observations
-- Regular frequency (daily, monthly, quarterly, annual)
-- One clear trend or one structural break
+**Лучше всего работает с:**
+- 100 – 2 000 наблюдений
+- Регулярной частотой (дневной, месячной, квартальной, годовой)
+- Одним выраженным трендом или одним структурным сдвигом
 
-**Hard limits:**
-- Maximum **10 000 rows** (dev cap, first 10k used)
-- Single numeric column only — no date parsing, no multivariate
-- At most **2 structural breaks** detected
-- Maximum differencing **d = 2**
+**Жёсткие ограничения:**
+- Максимум **10 000 строк** (первые 10k используются при превышении)
+- Только одна числовая колонка — парсинг дат не поддерживается, многомерные ряды не поддерживаются
+- Обнаруживается не более **2 структурных сдвигов**
+- Максимальный порядок дифференцирования **d = 2**
 
-**Known limitations:**
-- No exogenous regressors (ARIMAX not supported)
-- No long-memory models (ARFIMA)
-- GARCH order fixed at (1,1) — higher orders not tested
-- Seasonal period auto-detected from ACF; wrong detection → wrong model
-- Very short series (< 30 obs): AIC grid search unreliable, results indicative only
-- Highly irregular or intermittent series: outlier detection may over-clean
+**Известные ограничения:**
+- Экзогенные регрессоры не поддерживаются (ARIMAX не реализован)
+- Модели с долгой памятью (ARFIMA) отсутствуют
+- Порядок GARCH зафиксирован на (1,1) — более высокие порядки не проверяются
+- Сезонный период определяется автоматически по ACF; ошибочное определение ведёт к неверной модели
+- Очень короткие ряды (< 30 набл.): перебор по AIC ненадёжен, результаты носят ориентировочный характер
+- Нерегулярные или перемежающиеся ряды: очистка выбросов может быть избыточной
 
 ---
 
-## Cross-section OLS
+## Кросс-секционный OLS
 
-### What it does
+### Что делает
 
-Fits an OLS regression with automatic heteroskedasticity correction, VIF-based multicollinearity handling, backward BIC variable selection, Cook's D influential observation detection, and Chow structural stability tests.
+Строит OLS-регрессию с автоматической коррекцией гетероскедастичности, отбором переменных по VIF (мультиколлинеарность), пошаговым исключением по BIC, обнаружением влиятельных наблюдений по расстоянию Кука и тестами структурной стабильности Чоу.
 
-### Logic tree
+### Дерево логики
 
 ```
-1. PRE-ANALYSIS
-   ├─ Y type detection: continuous / binary / count
-   ├─ Non-numeric columns → rejected with error
-   └─ Missing values → listwise deletion
+1. ПРЕДВАРИТЕЛЬНЫЙ АНАЛИЗ
+   ├─ Тип Y: непрерывная / бинарная / счётная
+   ├─ Нечисловые колонки → ошибка
+   └─ Пропущенные значения → полное удаление строк
 
-2. MULTICOLLINEARITY CHECK
-   ├─ VIF per variable
+2. МУЛЬТИКОЛЛИНЕАРНОСТЬ
+   ├─ VIF для каждой переменной:
    │   ├─ VIF < 5 → OK
-   │   ├─ 5 ≤ VIF < 10 → warn
-   │   └─ VIF ≥ 10 → drop variable, re-check
-   └─ Condition number → global collinearity flag
+   │   ├─ 5 ≤ VIF < 10 → предупреждение
+   │   └─ VIF ≥ 10 → переменная удаляется, пересчёт
+   └─ Номер обусловленности → глобальный флаг коллинеарности
 
-3. MODEL ESTIMATION
+3. ОЦЕНКА МОДЕЛИ
    ├─ OLS (statsmodels)
-   ├─ Breusch-Pagan test → heteroskedasticity?
-   │   ├─ Yes → refit with HC3 robust SE
-   │   └─ No → keep classical SE
-   └─ F-test overall significance
+   ├─ Тест Бройша-Пагана → гетероскедастичность?
+   │   ├─ Да → переоценка с HC3-робастными СО
+   │   └─ Нет → классические СО
+   └─ F-тест общей значимости
 
-4. VARIABLE SELECTION
-   └─ Backward BIC stepwise:
-       ├─ Drop variable with highest p-value if BIC improves
-       └─ Repeat until no BIC improvement
+4. ОТБОР ПЕРЕМЕННЫХ
+   └─ Обратный пошаговый отбор по BIC:
+       ├─ Удалить переменную с максимальным p-значением, если BIC улучшается
+       └─ Повторять до тех пор, пока BIC не перестаёт улучшаться
 
-5. DIAGNOSTICS
-   ├─ Cook's D → influential observations (threshold: 4/n)
-   ├─ Leverage (hat matrix diagonal)
-   ├─ Jarque-Bera → residual normality
-   ├─ RESET test → functional form (linearity)
-   ├─ Durbin-Watson → serial correlation (informational)
-   └─ Chow test per X variable → structural stability
+5. ДИАГНОСТИКА
+   ├─ Расстояние Кука → влиятельные наблюдения (порог: 4/n)
+   ├─ Рычаги (диагональ шляпной матрицы)
+   ├─ Жарк-Бера → нормальность остатков
+   ├─ Тест RESET → функциональная форма (линейность)
+   ├─ Дарбин-Уотсон → серийная корреляция (информационно)
+   └─ Тест Чоу по каждому X → структурная стабильность
 
-6. OUTPUT
-   └─ Equation · Coefficients + β* · VIF table · R² · AIC/BIC
+6. ВЫВОД
+   └─ Уравнение · Коэффициенты + β* · Таблица VIF · R² · AIC/BIC
 ```
 
-### Data requirements & constraints
+### Требования к данным и ограничения
 
-**Works best with:**
-- 50 + observations
-- Continuous numeric Y
-- 2 – 15 regressors (before VIF pruning)
-- No strong multicollinearity between Xs
+**Лучше всего работает с:**
+- 50+ наблюдений
+- Непрерывным числовым Y
+- 2 – 15 регрессорами (до отбора по VIF)
+- Отсутствием сильной мультиколлинеарности между X
 
-**Hard limits:**
-- Maximum **10 000 rows**
-- All columns must be **numeric** — categorical variables must be pre-encoded as dummies before upload
-- No automatic dummy creation for string columns
+**Жёсткие ограничения:**
+- Максимум **10 000 строк**
+- Все колонки должны быть **числовыми** — категориальные переменные необходимо закодировать в дамми-переменные до загрузки
+- Автоматическое создание дамми для строковых колонок не поддерживается
 
-**Known limitations:**
-- Binary Y (0/1) and count Y detected and flagged, but **OLS is still fitted** — no logistic or Poisson regression
-- No interaction terms or polynomial features
-- No instrumental variables (IV/2SLS)
-- No time series correction — if data has a time dimension, use the Panel module instead
-- Backward BIC stepwise can miss suppressor variable structures
-- Influential observation threshold (Cook's D > 4/n) is heuristic — domain knowledge required
+**Известные ограничения:**
+- Бинарный Y (0/1) и счётный Y определяются и отмечаются, но **OLS всё равно строится** — логистическая и Пуассон регрессии не реализованы
+- Нет перекрёстных членов и полиномиальных признаков
+- Нет инструментальных переменных (IV/2SLS)
+- Нет коррекции для данных с временным измерением — если в данных есть временная структура, используйте режим «Панельные данные»
+- Обратный пошаговый отбор по BIC может пропустить структуры с переменными-подавителями (suppressor variables)
+- Порог влиятельных наблюдений (расстояние Кука > 4/n) является эвристикой — необходима экспертная оценка
 
 ---
 
-## Panel Data
+## Панельные данные
 
-### What it does
+### Что делает
 
-Estimates Pooled OLS, Fixed Effects, Random Effects, and Two-Way Fixed Effects models with clustered standard errors. Runs a full selection procedure (F-test → Hausman → Mundlak → TWFE F-test) to recommend the most appropriate specification. Diagnoses serial correlation and cross-sectional dependence in residuals, upgrading to Driscoll-Kraay SE when needed.
+Оценивает четыре модели (Pooled OLS, фиксированные эффекты, случайные эффекты, двусторонние FE) с кластеризованными стандартными ошибками. Проводит полную процедуру отбора (F-тест → Хаусман → Мундлак → F-тест TWFE) для выбора наиболее подходящей спецификации. Диагностирует серийную корреляцию и кросс-секционную зависимость в остатках, при необходимости переходя на стандартные ошибки Дрисколла-Краая.
 
-### Logic tree
+### Дерево логики
 
 ```
-1. PANEL STRUCTURE DIAGNOSTICS
-   ├─ Balance check: unbalanced → warn
-   ├─ T per entity:
-   │   ├─ T < 2 → HARD STOP (use OLS)
-   │   └─ T < 5 → warn (FE within-variation unreliable)
-   ├─ Dynamic panel detection (lag variable names):
-   │   └─ T < 5 → HARD STOP (need GMM/Arellano-Bond)
-   ├─ N < 30 → warn (clustered SE asymptotic validity)
-   └─ Within-variation check per regressor
+1. ДИАГНОСТИКА СТРУКТУРЫ ПАНЕЛИ
+   ├─ Проверка сбалансированности: несбалансированная → предупреждение
+   ├─ T на объект:
+   │   ├─ T < 2 → ЖЁСТКИЙ СТОП (используйте OLS)
+   │   └─ T < 5 → предупреждение (within-вариация FE ненадёжна)
+   ├─ Обнаружение динамической панели (имена переменных с лагами):
+   │   └─ T < 5 → ЖЁСТКИЙ СТОП (нужен GMM/Arellano-Bond)
+   ├─ N < 30 → предупреждение (асимптотика кластеризованных СО)
+   └─ Проверка within-вариации для каждого регрессора
 
-2. MODEL ESTIMATION (all four, clustered SE)
+2. ОЦЕНКА МОДЕЛЕЙ (все четыре, кластеризованные СО)
    ├─ POLS  — Pooled OLS
-   ├─ FE    — Fixed Effects (entity demeaning)
-   ├─ RE    — Random Effects (GLS, Swamy-Arora)
-   └─ TWFE  — Two-Way FE (entity + time effects)
+   ├─ FE    — фиксированные эффекты (within-деминг)
+   ├─ RE    — случайные эффекты (GLS, Swamy-Arora)
+   └─ TWFE  — двусторонние FE (объект + время)
 
-3. MODEL SELECTION
-   ├─ F-test (POLS vs FE): entity effects significant?
-   │   └─ Not significant → POLS (high confidence)
+3. ОТБОР МОДЕЛИ
+   ├─ F-тест (POLS vs FE): значимы ли индивидуальные эффекты?
+   │   └─ Незначимы → POLS (высокая уверенность)
    │
-   ├─ Hausman test (FE vs RE): Wooldridge auxiliary regression
-   │   ├─ p < 0.04  → FE (high confidence)
-   │   ├─ p ≥ 0.10  → RE (high confidence)
-   │   └─ 0.04 ≤ p < 0.10 → Mundlak tiebreaker
-   │       ├─ Any X̄_i significant → FE (moderate)
-   │       └─ None significant    → RE (moderate)
+   ├─ Тест Хаусмана (FE vs RE): вспомогательная регрессия Вулриджа
+   │   ├─ p < 0.04  → FE (высокая уверенность)
+   │   ├─ p ≥ 0.10  → RE (высокая уверенность)
+   │   └─ 0.04 ≤ p < 0.10 → тест Мундлака (разрешение конфликта)
+   │       ├─ Хотя бы один X̄_i значим → FE (умеренная уверенность)
+   │       └─ Ни один не значим       → RE (умеренная уверенность)
    │
-   └─ TWFE F-test: time effects significant?
-       └─ Yes → upgrade to TWFE
+   └─ F-тест TWFE: значимы ли временные эффекты?
+       └─ Да → переход на TWFE
 
-4. RESIDUAL DIAGNOSTICS
-   ├─ Wooldridge AR(1) test (first-differenced residuals)
-   │   └─ Serial correlation → warn
-   ├─ Pesaran CD test (requires T ≥ 10)
-   │   └─ Cross-sectional dependence → upgrade SE
-   └─ SE upgrade: clustered → Driscoll-Kraay (kernel)
+4. ДИАГНОСТИКА ОСТАТКОВ
+   ├─ Тест AR(1) Вулриджа (остатки первых разностей)
+   │   └─ Серийная корреляция → предупреждение
+   ├─ Тест CD Песарана (требует T ≥ 10)
+   │   └─ Кросс-секционная зависимость → обновление СО
+   └─ Обновление СО: кластеризованные → Дрисколл-Краай (ядерные)
 
-5. OUTPUT
-   └─ Recommended model · All 4 models · β* (within-std) ·
-      Observation-level fitted values · Model comparison table
+5. ВЫВОД
+   └─ Рекомендованная модель · Все 4 модели · β* (within-стд.) ·
+      Фитированные значения на уровне наблюдений · Таблица сравнения моделей
 ```
 
-### Data requirements & constraints
+### Требования к данным и ограничения
 
-**Works best with:**
-- **N ≥ 30** entities, **T ≥ 10** time periods
-- Strongly balanced panel (same T for all entities)
-- Entity and time columns clearly separated
-- Time column as integer (1, 2, 3… or year: 2010, 2011…)
+**Лучше всего работает с:**
+- **N ≥ 30** объектов, **T ≥ 10** периодов
+- Строго сбалансированной панелью (одинаковый T для всех объектов)
+- Чётко разделёнными колонками объекта и времени
+- Временной колонкой в виде целых чисел (1, 2, 3… или годы: 2010, 2011…)
 
-**Hard limits:**
-- Maximum **10 000 rows**
-- **T < 2** per entity → hard stop
-- **T < 5** with lag variables → hard stop (dynamic panel)
-- **Pesaran CD test requires T ≥ 10** — skipped for shorter panels
+**Жёсткие ограничения:**
+- Максимум **10 000 строк**
+- **T < 2** на объект → жёсткий стоп
+- **T < 5** при наличии лаговых переменных → жёсткий стоп (динамическая панель)
+- **Тест CD Песарана требует T ≥ 10** — пропускается для более коротких панелей
 
-**Known limitations:**
-- No endogeneity correction — IV/2SLS not implemented (biggest gap)
-- No dynamic panel estimators (Arellano-Bond, Blundell-Bond)
-- No spatial dependence testing
-- No staggered DiD / heterogeneous treatment effects in TWFE
-- AIC not reported for FE/RE models (profile log-likelihood unreliable)
-- Unbalanced panels supported but some tests assume balance
-- String time columns (e.g. "2020-Q1") not parsed — convert to integers before upload
+**Известные ограничения:**
+- Нет коррекции эндогенности — IV/2SLS не реализован (главный пробел)
+- Нет оценщиков динамических панелей (Arellano-Bond, Blundell-Bond)
+- Нет тестирования пространственной зависимости
+- Нет поддержки ступенчатого DiD / гетерогенных эффектов лечения в TWFE
+- AIC не рассчитывается для FE/RE-моделей (профильное логарифмическое правдоподобие ненадёжно)
+- Несбалансированные панели поддерживаются, но часть тестов предполагает баланс
+- Строковые временные колонки (например, «2020-Q1») не парсятся — преобразуйте в целые числа до загрузки
 
 ---
 
-## Data format
+## Формат данных
 
-All three modes accept **CSV** (comma or semicolon separated, `.` or `,` decimal). Excel `.xlsx` also supported.
+Все три режима принимают **CSV** (разделитель: запятая или точка с запятой, десятичный знак: `.` или `,`). Формат Excel `.xlsx` также поддерживается.
 
 ```
-# Time Series: single numeric column
+# Временные ряды: одна числовая колонка
 value
 1.23
 1.31
 1.28
 ...
 
-# OLS: Y + X columns, all numeric
+# OLS: Y + X-колонки, все числовые
 gdp,investment,trade_openness,inflation
 2.1,0.34,0.61,0.02
 ...
 
-# Panel: entity + time + Y + X columns
+# Панель: объект + время + Y + X-колонки
 country,year,gdp_growth,investment,trade
 DEU,2010,4.1,0.22,0.41
 DEU,2011,3.8,0.24,0.43
@@ -279,22 +279,22 @@ FRA,2010,1.9,0.19,0.39
 
 ---
 
-## Current limitations (all modes)
+## Общие ограничения (все режимы)
 
-- **Row cap:** 10 000 rows (first 10k used if exceeded)
-- **No missing value imputation** — rows with NaN in selected columns are dropped
-- **No categorical encoding** — all variables must be numeric at upload
-- **English-only UI**
-- **Single dataset in memory** — uploading a new file replaces the previous one
+- **Лимит строк:** 10 000 (при превышении используются первые 10k)
+- **Нет импутации пропущенных значений** — строки с NaN в выбранных колонках удаляются
+- **Нет кодирования категорий** — все переменные должны быть числовыми до загрузки
+- **Интерфейс только на английском языке**
+- **Один датасет в памяти** — загрузка нового файла заменяет предыдущий
 
 ---
 
-## Roadmap
+## Дорожная карта
 
-- [ ] IV / 2SLS for endogenous regressors (Panel)
-- [ ] Logistic regression and Poisson for binary/count Y (OLS)
-- [ ] ARIMAX — exogenous regressors in time series
-- [ ] Arellano-Bond GMM for dynamic panels
-- [ ] OLS panel page in the frontend
-- [ ] Panel data page in the frontend
-- [ ] Export results to PDF / LaTeX table
+- [ ] IV / 2SLS для эндогенных регрессоров (Панель)
+- [ ] Логистическая регрессия и Пуассон для бинарного/счётного Y (OLS)
+- [ ] ARIMAX — экзогенные регрессоры во временных рядах
+- [ ] GMM Arellano-Bond для динамических панелей
+- [ ] Страница OLS в интерфейсе
+- [ ] Страница панельных данных в интерфейсе
+- [ ] Экспорт результатов в PDF / LaTeX-таблицу
